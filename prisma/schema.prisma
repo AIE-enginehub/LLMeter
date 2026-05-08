@@ -1,0 +1,56 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// 管理员用户
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+/// API 请求日志
+model RequestLog {
+  id               String    @id @default(cuid())
+  provider         String
+  model            String?
+  path             String
+  method           String
+  isStream         Boolean   @default(false) @map("is_stream")
+  requestHeaders   Json?     @map("request_headers")
+  requestBody      Json?     @map("request_body")
+  responseStatus   Int?      @map("response_status")
+  responseBody     Json?     @map("response_body")
+
+  /// Token 用量：输入
+  promptTokens     Int?      @map("prompt_tokens")
+  /// Token 用量：输出
+  completionTokens Int?      @map("completion_tokens")
+  /// Token 用量：缓存命中（从缓存读取的输入 token）
+  cachedTokens     Int?      @map("cached_tokens")
+  /// Token 用量：总计
+  totalTokens      Int?      @map("total_tokens")
+
+  /// 计费预留
+  cost             Decimal?  @db.Decimal(10, 6)
+  status           String    @default("pending")
+  errorMessage     String?   @map("error_message")
+  duration         Int?
+  createdAt        DateTime  @default(now()) @map("created_at")
+  completedAt      DateTime? @map("completed_at")
+
+  @@index([provider])
+  @@index([model])
+  @@index([createdAt])
+  @@index([status])
+  @@map("request_logs")
+}

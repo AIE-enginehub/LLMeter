@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# gongs-credit
 
-## Getting Started
+AI API 中转网关 —— 统一代理转发各 AI 厂商 API 并记录请求/响应/Token 用量。
 
-First, run the development server:
+## 快速开始
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
+# 安装依赖
+pnpm install
+
+# 配置环境变量
+cp .env.example .env
+# 编辑 .env 填入数据库连接和服务商 base URL
+
+# 初始化数据库
+npx prisma migrate dev
+npx prisma db seed
+
+# 启动
 pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+默认管理员：`admin` / `admin123`
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 添加服务商
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+在 `.env` 中加一行即可，协议从 URL 路径自动推断（`/v1` → openai, `/anthropic` → anthropic, 其它 → gemini）：
 
-## Learn More
+```env
+OPENAI_BASE_URL="https://api.openai.com/v1"
+DEEPSEEK_BASE_URL="https://api.deepseek.com/v1"
+MINIMAX_BASE_URL="https://api.minimaxi.com/anthropic"
+GEMINI_BASE_URL="https://generativelanguage.googleapis.com/v1beta"
+```
 
-To learn more about Next.js, take a look at the following resources:
+调用方将 SDK 的 base_url 设为 `http://proxy/api/{provider}`：
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```python
+client = OpenAI(base_url="http://proxy/api/openai", api_key="sk-xxx")
+client = OpenAI(base_url="http://proxy/api/deepseek", api_key="sk-xxx")
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 文档
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [产品需求](docs/PRD.md)
+- [技术方案](docs/TECH_SPEC.md)
