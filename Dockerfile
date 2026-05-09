@@ -1,9 +1,12 @@
 # ===== 阶段 1：依赖缓存层 =====
 FROM docker.m.daocloud.io/library/rust:1.87-slim-bookworm AS chef
 
-# 使用国内 apt 镜像源（阿里云）
+# 使用国内 apt 镜像源（阿里云）+ 更新 GPG 密钥
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
-    && apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+    && apt-get update --allow-insecure-repositories \
+    && apt-get install -y --allow-unauthenticated debian-archive-keyring \
+    && apt-get update && apt-get install -y pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # 使用中科大 crates.io 镜像
 RUN mkdir -p /usr/local/cargo/registry \
@@ -31,7 +34,10 @@ RUN cargo build --release
 FROM docker.m.daocloud.io/library/debian:bookworm-slim
 
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
-    && apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+    && apt-get update --allow-insecure-repositories \
+    && apt-get install -y --allow-unauthenticated debian-archive-keyring \
+    && apt-get update && apt-get install -y ca-certificates libssl3 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY --from=builder /app/target/release/gongs-credit .
