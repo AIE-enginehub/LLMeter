@@ -160,6 +160,7 @@ struct LogSummaryRow {
     status: String,
     prompt_tokens: Option<i32>,
     completion_tokens: Option<i32>,
+    cached_tokens: Option<i32>,
     total_tokens: Option<i32>,
     duration_ms: Option<i32>,
     error_message: Option<String>,
@@ -677,7 +678,8 @@ async fn list_logs(
     // 查询数据
     let data_sql = format!(
         "SELECT id, org_id, api_key_id, provider, model, path, method, is_stream, \
-                response_status, status, prompt_tokens, completion_tokens, total_tokens, \
+                response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
+                (COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0) + COALESCE(cached_tokens, 0)) AS total_tokens, \
                 duration_ms, error_message, created_at \
          FROM request_logs {where_clause} \
          ORDER BY created_at DESC \
@@ -758,6 +760,9 @@ struct StatsOverview {
     total_requests: i64,
     success_requests: i64,
     error_requests: i64,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    cached_tokens: i64,
     total_tokens: i64,
     avg_duration_ms: f64,
 }
@@ -766,6 +771,9 @@ struct StatsOverview {
 struct ProviderStats {
     provider: String,
     request_count: i64,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    cached_tokens: i64,
     total_tokens: i64,
     error_count: i64,
 }
@@ -774,6 +782,9 @@ struct ProviderStats {
 struct ModelStats {
     model: String,
     request_count: i64,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    cached_tokens: i64,
     total_tokens: i64,
     avg_duration_ms: f64,
 }
@@ -782,6 +793,9 @@ struct ModelStats {
 struct DailyStats {
     date: chrono::NaiveDate,
     request_count: i64,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    cached_tokens: i64,
     total_tokens: i64,
     error_count: i64,
 }
@@ -807,7 +821,10 @@ async fn get_stats(
             COUNT(*)::BIGINT AS total_requests, \
             COUNT(*) FILTER (WHERE status = 'success')::BIGINT AS success_requests, \
             COUNT(*) FILTER (WHERE status = 'error')::BIGINT AS error_requests, \
-            COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens, \
+            COALESCE(SUM(prompt_tokens), 0)::BIGINT AS prompt_tokens, \
+            COALESCE(SUM(completion_tokens), 0)::BIGINT AS completion_tokens, \
+            COALESCE(SUM(cached_tokens), 0)::BIGINT AS cached_tokens, \
+            (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) + COALESCE(SUM(cached_tokens), 0))::BIGINT AS total_tokens, \
             COALESCE(AVG(duration_ms)::FLOAT8, 0) AS avg_duration_ms \
          FROM request_logs WHERE created_at >= $1 {org_filter}"
     );
@@ -824,7 +841,10 @@ async fn get_stats(
     let provider_sql = format!(
         "SELECT provider, \
             COUNT(*)::BIGINT AS request_count, \
-            COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens, \
+            COALESCE(SUM(prompt_tokens), 0)::BIGINT AS prompt_tokens, \
+            COALESCE(SUM(completion_tokens), 0)::BIGINT AS completion_tokens, \
+            COALESCE(SUM(cached_tokens), 0)::BIGINT AS cached_tokens, \
+            (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) + COALESCE(SUM(cached_tokens), 0))::BIGINT AS total_tokens, \
             COUNT(*) FILTER (WHERE status = 'error')::BIGINT AS error_count \
          FROM request_logs WHERE created_at >= $1 {org_filter} \
          GROUP BY provider ORDER BY request_count DESC"
@@ -842,7 +862,10 @@ async fn get_stats(
     let model_sql = format!(
         "SELECT COALESCE(model, 'unknown') AS model, \
             COUNT(*)::BIGINT AS request_count, \
-            COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens, \
+            COALESCE(SUM(prompt_tokens), 0)::BIGINT AS prompt_tokens, \
+            COALESCE(SUM(completion_tokens), 0)::BIGINT AS completion_tokens, \
+            COALESCE(SUM(cached_tokens), 0)::BIGINT AS cached_tokens, \
+            (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) + COALESCE(SUM(cached_tokens), 0))::BIGINT AS total_tokens, \
             COALESCE(AVG(duration_ms)::FLOAT8, 0) AS avg_duration_ms \
          FROM request_logs WHERE created_at >= $1 {org_filter} \
          GROUP BY model ORDER BY request_count DESC"
@@ -860,7 +883,10 @@ async fn get_stats(
     let daily_sql = format!(
         "SELECT created_at::DATE AS date, \
             COUNT(*)::BIGINT AS request_count, \
-            COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens, \
+            COALESCE(SUM(prompt_tokens), 0)::BIGINT AS prompt_tokens, \
+            COALESCE(SUM(completion_tokens), 0)::BIGINT AS completion_tokens, \
+            COALESCE(SUM(cached_tokens), 0)::BIGINT AS cached_tokens, \
+            (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) + COALESCE(SUM(cached_tokens), 0))::BIGINT AS total_tokens, \
             COUNT(*) FILTER (WHERE status = 'error')::BIGINT AS error_count \
          FROM request_logs WHERE created_at >= $1 {org_filter} \
          GROUP BY date ORDER BY date"

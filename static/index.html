@@ -166,6 +166,11 @@
                 <div class="bg-gradient-to-br from-violet-50 to-white border border-violet-100/60 rounded-xl p-4 anim-fade-in-up anim-delay-3">
                   <p class="text-xs text-violet-500/80 font-medium">总 Token</p>
                   <p class="text-2xl font-bold text-slate-800 mt-1" x-text="fmtToken(stats.overview.total_tokens)"></p>
+                  <p class="text-[10px] text-slate-500 mt-1">
+                    入<span x-text="fmtToken(stats.overview.prompt_tokens)"></span> · 
+                    出<span x-text="fmtToken(stats.overview.completion_tokens)"></span> · 
+                    存<span x-text="fmtToken(stats.overview.cached_tokens)"></span>
+                  </p>
                 </div>
                 <div class="bg-gradient-to-br from-amber-50 to-white border border-amber-100/60 rounded-xl p-4 anim-fade-in-up anim-delay-4">
                   <p class="text-xs text-amber-500/80 font-medium">平均耗时</p>
@@ -185,7 +190,10 @@
                           <tr class="border-b border-slate-50 hover:bg-blue-50/50 transition">
                             <td class="px-5 py-2.5 font-medium text-slate-700" x-text="p.provider"></td>
                             <td class="px-5 py-2.5 text-right text-slate-600" x-text="formatNum(p.request_count)"></td>
-                            <td class="px-5 py-2.5 text-right text-slate-600" x-text="fmtToken(p.total_tokens)"></td>
+                            <td class="px-5 py-2.5 text-right text-slate-600">
+                            <div x-text="fmtToken(p.total_tokens)"></div>
+                            <div class="text-[10px] text-slate-400 mt-0.5">入<span x-text="fmtToken(p.prompt_tokens)"></span> · 出<span x-text="fmtToken(p.completion_tokens)"></span> · 存<span x-text="fmtToken(p.cached_tokens)"></span></div>
+                          </td>
                             <td class="px-5 py-2.5 text-right"><span :class="p.error_count > 0 ? 'text-red-500' : 'text-slate-400'" x-text="p.error_count"></span></td>
                           </tr>
                         </template>
@@ -205,7 +213,10 @@
                           <tr class="border-b border-slate-50 hover:bg-blue-50/50 transition">
                             <td class="px-5 py-2.5 font-mono text-xs text-slate-700" x-text="m.model"></td>
                             <td class="px-5 py-2.5 text-right text-slate-600" x-text="formatNum(m.request_count)"></td>
-                            <td class="px-5 py-2.5 text-right text-slate-600" x-text="fmtToken(m.total_tokens)"></td>
+                            <td class="px-5 py-2.5 text-right text-slate-600">
+                            <div x-text="fmtToken(m.total_tokens)"></div>
+                            <div class="text-[10px] text-slate-400 mt-0.5">入<span x-text="fmtToken(m.prompt_tokens)"></span> · 出<span x-text="fmtToken(m.completion_tokens)"></span> · 存<span x-text="fmtToken(m.cached_tokens)"></span></div>
+                          </td>
                             <td class="px-5 py-2.5 text-right text-slate-500"><span x-text="Math.round(m.avg_duration_ms)"></span>ms</td>
                           </tr>
                         </template>
@@ -504,7 +515,10 @@
                               <span x-text="log.status === 'success' ? '成功' : log.status === 'error' ? '错误' : '处理中'"></span>
                             </span>
                           </td>
-                          <td class="px-4 py-2.5 text-right text-xs text-slate-500" x-text="fmtToken(log.total_tokens)"></td>
+                        <td class="px-4 py-2.5 text-right text-xs text-slate-500">
+                          <div class="font-medium text-slate-600" x-text="fmtToken(log.total_tokens)"></div>
+                          <div class="text-[10px] text-slate-400 mt-0.5">入<span x-text="fmtToken(log.prompt_tokens)"></span> · 出<span x-text="fmtToken(log.completion_tokens)"></span> · 存<span x-text="fmtToken(log.cached_tokens)"></span></div>
+                        </td>
                           <td class="px-4 py-2.5 text-right text-xs text-slate-500" x-text="log.duration_ms != null ? log.duration_ms + 'ms' : '-'"></td>
                         </tr>
                       </template>
@@ -625,6 +639,11 @@
                       <div class="absolute bottom-full mb-2 hidden group-hover:block z-10">
                         <div class="bg-slate-800 text-white text-xs rounded-lg px-3 py-1.5 whitespace-nowrap shadow-lg">
                           <span x-text="d.date"></span>：<span x-text="fmtToken(d.total_tokens)"></span> Token
+                          <div class="text-[10px] text-slate-300 mt-1">
+                            入 <span x-text="fmtToken(d.prompt_tokens)"></span> · 
+                            出 <span x-text="fmtToken(d.completion_tokens)"></span> · 
+                            存 <span x-text="fmtToken(d.cached_tokens)"></span>
+                          </div>
                         </div>
                       </div>
                       <div class="w-full rounded-t-md bg-gradient-to-t from-emerald-500 to-teal-400 transition-all duration-300 hover:from-emerald-600 hover:to-teal-500 min-h-[4px]"
@@ -654,7 +673,10 @@
                           </td>
                           <td class="px-5 py-2.5 font-mono text-xs text-slate-700" x-text="m.model"></td>
                           <td class="px-5 py-2.5 text-right text-slate-600" x-text="formatNum(m.request_count)"></td>
-                          <td class="px-5 py-2.5 text-right text-slate-600" x-text="fmtToken(m.total_tokens)"></td>
+                          <td class="px-5 py-2.5 text-right text-slate-600">
+                            <div x-text="fmtToken(m.total_tokens)"></div>
+                            <div class="text-[10px] text-slate-400 mt-0.5">入<span x-text="fmtToken(m.prompt_tokens)"></span> · 出<span x-text="fmtToken(m.completion_tokens)"></span> · 存<span x-text="fmtToken(m.cached_tokens)"></span></div>
+                          </td>
                           <td class="px-5 py-2.5 text-right text-slate-500"><span x-text="Math.round(m.avg_duration_ms)"></span>ms</td>
                         </tr>
                       </template>
