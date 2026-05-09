@@ -5,6 +5,14 @@ FROM docker.m.daocloud.io/library/rust:1.88-slim-bullseye AS builder
 
 WORKDIR /app
 
+# 安装编译所需的系统依赖 (pkg-config 和 libssl-dev)
+# 替换 apt 源为清华源加速国内下载
+RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list \
+    && sed -i 's|security.debian.org/debian-security|mirrors.tuna.tsinghua.edu.cn/debian-security|g' /etc/apt/sources.list \
+    && apt-get update \
+    && apt-get install -y pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # 官方 Rust 镜像的 CARGO_HOME 是 /usr/local/cargo，所以配置要写在这里
 # 使用字节跳动 (rsproxy) 的 sparse 镜像源，如果 ustc 也不稳定可以换这个
 # 增加网络超时时间，防止下载大包时超时
@@ -31,6 +39,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # ===== 运行阶段 =====
 FROM docker.m.daocloud.io/library/debian:bullseye-slim
+
+# 安装运行时的系统依赖 (OpenSSL 动态库和 CA 证书，供 reqwest 等使用)
+RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list \
+    && sed -i 's|security.debian.org/debian-security|mirrors.tuna.tsinghua.edu.cn/debian-security|g' /etc/apt/sources.list \
+    && apt-get update \
+    && apt-get install -y libssl1.1 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 # 从 builder 阶段复制编译好的二进制文件
