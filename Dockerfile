@@ -1,51 +1,69 @@
-# ===== 阶段 1：依赖缓存层 =====
-FROM docker.m.daocloud.io/library/rust:1.87-slim-bookworm AS chef
+# syntax=docker/dockerfile:1.7
 
-# 修复 Debian GPG 密钥过期问题并安装构建依赖
-RUN rm -f /etc/apt/apt.conf.d/docker-clean \
-    && apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::AllowInsecureRepositories=true -o Acquire::AllowDowngradeToInsecureRepositories=true \
-    && apt-get install -y --allow-unauthenticated debian-archive-keyring gnupg \
-    && gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys 6ED0E7B82643E131 78DBA3BC47EF2265 F8D2585B8783D481 54404762BBB6E853 BDE6D2B9216EC7A8 \
-    && gpg --export 6ED0E7B82643E131 78DBA3BC47EF2265 F8D2585B8783D481 54404762BBB6E853 BDE6D2B9216EC7A8 | apt-key add - \
-    && apt-get update \
-    && apt-get install -y pkg-config libssl-dev \
+# =========================
+# 1. planner
+# =========================
+FROM docker.m.daocloud.io/library/rust:1.87-slim-bookworm AS planner
+
+# 使用阿里云 Debian 镜像
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# 使用中科大 crates.io 镜像
-RUN mkdir -p /usr/local/cargo/registry \
-    && printf '[source.crates-io]\nreplace-with = "ustc"\n\n[source.ustc]\nregistry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"\n\n[registries.ustc]\nindex = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"\n' \
+# cargo 镜像
+RUN mkdir -p /usr/local/cargo \
+    && printf '[source.crates-io]\nreplace-with = "aliyun"\n\n[source.aliyun]\nregistry = "sparse+https://mirrors.aliyun.com/crates.io-index/"\n' \
     > /usr/local/cargo/config.toml
 
+RUN cargo install cargo-chef
+
 WORKDIR /app
 
-# 先拷贝依赖清单，构建空壳项目以缓存依赖编译产物
-COPY Cargo.toml Cargo.lock* ./
-RUN mkdir src && echo "fn main() {}" > src/main.rs \
-    && cargo build --release \
-    && rm -rf src target/release/.fingerprint/gongs-credit-*
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
 
-# ===== 阶段 2：编译项目 =====
-FROM chef AS builder
+RUN cargo chef prepare --recipe-path recipe.json
 
-COPY src/ src/
-COPY static/ static/
-COPY migrations/ migrations/
+# =========================
+# 2. builder
+# =========================
+FROM planner AS builder
 
-RUN cargo build --release
+COPY --from=planner /app/recipe.json recipe.json
 
-# ===== 阶段 3：运行（从构建阶段拷贝 keyring 避免重复修复）=====
+# 依赖缓存
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo chef cook --release --recipe-path recipe.json
+
+COPY . .
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build --release
+
+# =========================
+# 3. runtime
+# =========================
 FROM docker.m.daocloud.io/library/debian:bookworm-slim
 
-COPY --from=chef /etc/apt/trusted.gpg /etc/apt/trusted.gpg
-COPY --from=chef /usr/share/keyrings/debian-archive-keyring.gpg /usr/share/keyrings/debian-archive-keyring.gpg
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
 
-RUN rm -f /etc/apt/apt.conf.d/docker-clean \
-    && apt-get update && apt-get install -y ca-certificates libssl3 \
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
 COPY --from=builder /app/target/release/gongs-credit .
-COPY migrations/ migrations/
+
+COPY migrations ./migrations
+COPY static ./static
 
 EXPOSE 5000
 
