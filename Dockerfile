@@ -5,9 +5,14 @@ FROM docker.m.daocloud.io/library/rust:1.87-slim-bullseye AS builder
 WORKDIR /app
 
 # 官方 Rust 镜像的 CARGO_HOME 是 /usr/local/cargo，所以配置要写在这里
-# 使用中科大 (USTC) 的 sparse 镜像源，速度更快且稳定
+# 使用字节跳动 (rsproxy) 的 sparse 镜像源，如果 ustc 也不稳定可以换这个
+# 增加网络超时时间，防止下载大包时超时
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true \
+    CARGO_NET_RETRY=3 \
+    CARGO_HTTP_TIMEOUT=120
+
 RUN mkdir -p /usr/local/cargo \
-    && printf '[source.crates-io]\nreplace-with = "ustc"\n\n[source.ustc]\nregistry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"\n' \
+    && printf '[source.crates-io]\nreplace-with = "rsproxy"\n\n[source.rsproxy]\nregistry = "sparse+https://rsproxy.cn/index/"\n' \
     > /usr/local/cargo/config.toml
 
 # 复制源码和依赖文件
@@ -19,7 +24,8 @@ COPY migrations/ migrations/
 # 使用 BuildKit 缓存加速后续构建，避免每次都重新下载和编译依赖
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    cargo build --release \
+    # 重试机制：如果 cargo build 失败，则重试最多 3 次
+    cargo build --release || cargo build --release || cargo build --release \
     && cp /app/target/release/gongs-credit /app/gongs-credit
 
 # ===== 运行阶段 =====
