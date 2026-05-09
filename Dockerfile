@@ -1,5 +1,5 @@
 # ===== 阶段 1：依赖缓存层 =====
-FROM rust:1.87-slim-bookworm AS chef
+FROM registry.cn-hangzhou.aliyuncs.com/library/rust:1.87-slim-bookworm AS chef
 
 # 使用国内 apt 镜像源（阿里云）
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
@@ -36,7 +36,7 @@ COPY migrations/ migrations/
 RUN cargo build --release
 
 # ===== 阶段 3：运行 =====
-FROM debian:bookworm-slim
+FROM registry.cn-hangzhou.aliyuncs.com/library/debian:bookworm-slim
 
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
     && apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
