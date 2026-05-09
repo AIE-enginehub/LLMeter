@@ -188,6 +188,8 @@ pub fn extract_token_usage(protocol: Protocol, body: &Value) -> TokenUsage {
 /// 从 SSE 流式 chunk 中提取 token 用量
 /// 解析 `data: {...}` 行，尝试提取 usage 信息
 pub fn extract_streaming_usage(protocol: Protocol, chunk: &str) -> Option<TokenUsage> {
+    let mut result: Option<TokenUsage> = None;
+
     for line in chunk.lines() {
         let line = line.trim();
         if !line.starts_with("data: ") {
@@ -197,12 +199,86 @@ pub fn extract_streaming_usage(protocol: Protocol, chunk: &str) -> Option<TokenU
         if json_str == "[DONE]" {
             continue;
         }
-        if let Ok(parsed) = serde_json::from_str::<Value>(json_str) {
+        let parsed = match serde_json::from_str::<Value>(json_str) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if protocol == Protocol::Anthropic {
+            // Anthropic SSE 中 usage 分散在多个事件：
+            // - message_start.message.usage 包含 input_tokens
+            // - message_delta.usage 包含 output_tokens（及可能的 cache 信息）
+            let usage = extract_anthropic_streaming_event(&parsed);
+            if usage.prompt_tokens.is_some() || usage.completion_tokens.is_some() {
+                result = Some(merge_token_usage(result, usage));
+            }
+        } else {
             let usage = extract_token_usage(protocol, &parsed);
             if usage.prompt_tokens.is_some() || usage.completion_tokens.is_some() {
-                return Some(usage);
+                result = Some(merge_token_usage(result, usage));
             }
         }
     }
-    None
+
+    result
+}
+
+/// 从 Anthropic 流式事件中提取 token 用量
+fn extract_anthropic_streaming_event(event: &Value) -> TokenUsage {
+    let event_type = event["type"].as_str().unwrap_or("");
+
+    match event_type {
+        // message_start: usage 嵌套在 message.usage 中
+        "message_start" => {
+            let usage = &event["message"]["usage"];
+            let input = usage["input_tokens"].as_i64().map(|v| v as i32);
+            let output = usage["output_tokens"].as_i64().map(|v| v as i32);
+            TokenUsage {
+                prompt_tokens: input,
+                completion_tokens: output,
+                cached_tokens: usage["cache_read_input_tokens"]
+                    .as_i64()
+                    .map(|v| v as i32),
+                total_tokens: match (input, output) {
+                    (Some(i), Some(o)) => Some(i + o),
+                    _ => None,
+                },
+            }
+        }
+        // message_delta: usage 在顶层
+        "message_delta" => {
+            let usage = &event["usage"];
+            let input = usage["input_tokens"].as_i64().map(|v| v as i32);
+            let output = usage["output_tokens"].as_i64().map(|v| v as i32);
+            TokenUsage {
+                prompt_tokens: input,
+                completion_tokens: output,
+                cached_tokens: usage["cache_read_input_tokens"]
+                    .as_i64()
+                    .map(|v| v as i32),
+                total_tokens: match (input, output) {
+                    (Some(i), Some(o)) => Some(i + o),
+                    _ => None,
+                },
+            }
+        }
+        _ => TokenUsage::default(),
+    }
+}
+
+/// 合并两个 TokenUsage，新值覆盖旧值（None 保留旧值）
+pub fn merge_token_usage(base: Option<TokenUsage>, update: TokenUsage) -> TokenUsage {
+    let base = base.unwrap_or_default();
+    let prompt = update.prompt_tokens.or(base.prompt_tokens);
+    let completion = update.completion_tokens.or(base.completion_tokens);
+    let cached = update.cached_tokens.or(base.cached_tokens);
+    TokenUsage {
+        prompt_tokens: prompt,
+        completion_tokens: completion,
+        cached_tokens: cached,
+        total_tokens: match (prompt, completion) {
+            (Some(p), Some(c)) => Some(p + c),
+            _ => base.total_tokens,
+        },
+    }
 }

@@ -299,7 +299,7 @@ async fn handle_streaming_response(
                 Some(Ok(chunk)) => {
                     if let Ok(text) = std::str::from_utf8(&chunk) {
                         if let Some(usage) = protocol::extract_streaming_usage(proto, text) {
-                            last_usage = usage;
+                            last_usage = protocol::merge_token_usage(Some(last_usage), usage);
                         }
                     }
                     Some((Ok::<Bytes, std::io::Error>(chunk), (stream, tx, last_usage)))

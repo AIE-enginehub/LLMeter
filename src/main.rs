@@ -37,7 +37,7 @@ async fn main() {
         .fallback(proxy::proxy_handler)
         .with_state(state);
 
-    let port = std::env::var("PORT").unwrap_or("3000".to_string());
+    let port = std::env::var("PORT").unwrap_or("5000".to_string());
     let addr = format!("0.0.0.0:{port}");
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap_or_else(|e| {
