@@ -1,6 +1,7 @@
 # ===== 构建阶段 =====
 # 使用 bullseye (Debian 11, glibc 2.31) 规避 buildkit v0.8 的 clone3 seccomp 限制
-FROM docker.m.daocloud.io/library/rust:1.87-slim-bullseye AS builder
+# 升级 Rust 版本到 1.88-slim-bullseye，以满足依赖库的要求
+FROM docker.m.daocloud.io/library/rust:1.88-slim-bullseye AS builder
 
 WORKDIR /app
 
