@@ -1,69 +1,65 @@
-FROM docker.m.daocloud.io/library/rust:1.87-slim-bookworm AS planner
+# syntax=docker/dockerfile:1
 
-# 修复 Debian key 问题 + 阿里云源
-RUN rm -f /etc/apt/apt.conf.d/docker-clean \
-    && sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
-    && apt-get update \
-       -o Acquire::AllowInsecureRepositories=true \
-       -o Acquire::AllowDowngradeToInsecureRepositories=true \
-       -o APT::Get::AllowUnauthenticated=true \
-    && apt-get install -y --allow-unauthenticated \
-       ca-certificates \
-       pkg-config \
-       libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Rust crates 镜像
-RUN mkdir -p /usr/local/cargo \
-    && printf '[source.crates-io]\nreplace-with = "aliyun"\n\n[source.aliyun]\nregistry = "sparse+https://mirrors.aliyun.com/crates.io-index/"\n' \
-    > /usr/local/cargo/config.toml
-
-# 安装 cargo-chef
-RUN cargo install cargo-chef
+# =========================
+# Builder
+# =========================
+FROM docker.m.daocloud.io/library/rust:1.87-slim-bookworm AS builder
 
 WORKDIR /app
 
+# 使用阿里云 Debian 镜像
+RUN sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
+    && sed -i 's|http://security.debian.org|https://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+       pkg-config \
+       libssl-dev \
+       ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 先复制 Cargo 文件利用缓存
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
 
-RUN cargo chef prepare --recipe-path recipe.json
+# 如果是 workspace 项目，把各 crate 的 Cargo.toml 也复制
+# COPY crates/*/Cargo.toml crates/*/
 
-# =========================
-# builder
-# =========================
-FROM planner AS builder
+# 创建空 src 避免首次 build 失败
+RUN mkdir src && echo "fn main(){}" > src/main.rs
 
-COPY --from=planner /app/recipe.json recipe.json
+# 预编译依赖
+RUN cargo build --release || true
 
-RUN cargo chef cook --release --recipe-path recipe.json
+# 删除假代码
+RUN rm -rf src
 
+# 复制完整项目
 COPY . .
 
+# 编译正式程序
 RUN cargo build --release
 
 # =========================
-# runtime
+# Runtime
 # =========================
 FROM docker.m.daocloud.io/library/debian:bookworm-slim
 
-RUN rm -f /etc/apt/apt.conf.d/docker-clean \
-    && sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
+WORKDIR /app
+
+# runtime 只装必要依赖
+RUN sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
+    && sed -i 's|http://security.debian.org|https://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-       -o Acquire::AllowInsecureRepositories=true \
-       -o Acquire::AllowDowngradeToInsecureRepositories=true \
-       -o APT::Get::AllowUnauthenticated=true \
-    && apt-get install -y --allow-unauthenticated \
+    && apt-get install -y --no-install-recommends \
        ca-certificates \
        libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+# 从 builder 拷贝二进制
+# 把 gongs-credit 改成你的实际 binary 名称
+COPY --from=builder /app/target/release/gongs-credit /app/gongs-credit
 
-COPY --from=builder /app/target/release/gongs-credit .
+# 如果程序监听端口
+EXPOSE 8080
 
-COPY migrations ./migrations
-COPY static ./static
-
-EXPOSE 5000
-
-CMD ["./gongs-credit"]
+# 启动
+CMD ["/app/gongs-credit"]
