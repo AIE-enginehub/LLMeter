@@ -228,7 +228,10 @@ async fn handle_normal_response(
         (StatusCode::BAD_GATEWAY, format!("Failed to read upstream response: {e}"))
     })?;
 
-    let resp_json: Option<Value> = serde_json::from_slice(&resp_bytes).ok();
+    let resp_json: Option<Value> = serde_json::from_slice(&resp_bytes).ok().or_else(|| {
+        String::from_utf8(resp_bytes.to_vec()).ok().map(Value::String)
+    });
+    
     let usage = resp_json
         .as_ref()
         .map(|j| protocol::extract_token_usage(protocol, j))
@@ -240,7 +243,7 @@ async fn handle_normal_response(
     tokio::spawn(async move {
         let status_str = if (200..300).contains(&status_code) { "success" } else { "error" };
         let error_msg = if status_str == "error" {
-            resp_json.as_ref().and_then(|j| j["error"]["message"].as_str()).map(String::from)
+            resp_json.as_ref().and_then(|j| j.get("error")).and_then(|e| e.get("message")).and_then(|m| m.as_str()).map(String::from)
         } else {
             None
         };
@@ -248,7 +251,7 @@ async fn handle_normal_response(
         let _ = sqlx::query(
             "UPDATE request_logs SET response_status=$2, status=$3, prompt_tokens=$4, \
              completion_tokens=$5, cached_tokens=$6, total_tokens=$7, duration_ms=$8, \
-             error_message=$9, updated_at=now() WHERE id=$1"
+             error_message=$9, response_body=$10, updated_at=now() WHERE id=$1"
         )
         .bind(log_id)
         .bind(status_code as i32)
@@ -259,6 +262,7 @@ async fn handle_normal_response(
         .bind(usage.total_tokens)
         .bind(duration_ms)
         .bind(error_msg.as_deref())
+        .bind(resp_json.as_ref())
         .execute(&pool)
         .await;
     });
@@ -290,27 +294,28 @@ async fn handle_streaming_response(
 
     let pool_clone = pool.clone();
     let status_code = status.as_u16();
-    let (usage_tx, usage_rx) = tokio::sync::oneshot::channel::<(TokenUsage, i32)>();
+    let (usage_tx, usage_rx) = tokio::sync::oneshot::channel::<(TokenUsage, i32, String)>();
 
     let body_stream = stream::unfold(
-        (byte_stream, Some(usage_tx), TokenUsage::default()),
-        move |(mut stream, tx, mut last_usage)| async move {
+        (byte_stream, Some(usage_tx), TokenUsage::default(), String::new()),
+        move |(mut stream, tx, mut last_usage, mut accumulated_body)| async move {
             match stream.next().await {
                 Some(Ok(chunk)) => {
                     if let Ok(text) = std::str::from_utf8(&chunk) {
+                        accumulated_body.push_str(text);
                         if let Some(usage) = protocol::extract_streaming_usage(proto, text) {
                             last_usage = protocol::merge_token_usage(Some(last_usage), usage);
                         }
                     }
-                    Some((Ok::<Bytes, std::io::Error>(chunk), (stream, tx, last_usage)))
+                    Some((Ok::<Bytes, std::io::Error>(chunk), (stream, tx, last_usage, accumulated_body)))
                 }
                 Some(Err(e)) => {
                     let io_err = std::io::Error::new(std::io::ErrorKind::Other, e.to_string());
-                    Some((Err(io_err), (stream, tx, last_usage)))
+                    Some((Err(io_err), (stream, tx, last_usage, accumulated_body)))
                 }
                 None => {
                     if let Some(tx) = tx {
-                        let _ = tx.send((last_usage, start.elapsed().as_millis() as i32));
+                        let _ = tx.send((last_usage, start.elapsed().as_millis() as i32, accumulated_body));
                     }
                     None
                 }
@@ -320,12 +325,14 @@ async fn handle_streaming_response(
 
     // 异步等待流结束并更新日志
     tokio::spawn(async move {
-        if let Ok((usage, duration_ms)) = usage_rx.await {
+        if let Ok((usage, duration_ms, body_str)) = usage_rx.await {
             let status_str = if (200..300).contains(&status_code) { "success" } else { "error" };
+            let resp_json = Value::String(body_str);
+            
             let _ = sqlx::query(
                 "UPDATE request_logs SET response_status=$2, status=$3, prompt_tokens=$4, \
                  completion_tokens=$5, cached_tokens=$6, total_tokens=$7, duration_ms=$8, \
-                 updated_at=now() WHERE id=$1"
+                 response_body=$9, updated_at=now() WHERE id=$1"
             )
             .bind(log_id)
             .bind(status_code as i32)
@@ -335,6 +342,7 @@ async fn handle_streaming_response(
             .bind(usage.cached_tokens)
             .bind(usage.total_tokens)
             .bind(duration_ms)
+            .bind(resp_json)
             .execute(&pool_clone)
             .await;
         }

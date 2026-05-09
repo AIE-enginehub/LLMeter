@@ -699,7 +699,26 @@ function fmtTime(t) {
 
 /** 复制文本到剪贴板 */
 async function copyText(text) {
-  try { await navigator.clipboard.writeText(text); } catch {}
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // 兼容非 HTTPS 环境 (HTTP 协议下 navigator.clipboard 不可用)
+      let textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.style.position = "fixed";
+      textArea.style.left = "-999999px";
+      textArea.style.top = "-999999px";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      document.execCommand('copy');
+      textArea.remove();
+    }
+    alert("复制成功！");
+  } catch (err) {
+    alert("复制失败，请手动选择文本复制");
+  }
 }
 
 /** 封装 fetch 请求 */
