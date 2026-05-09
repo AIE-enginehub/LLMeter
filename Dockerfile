@@ -1,7 +1,13 @@
 # ===== 阶段 1：依赖缓存层 =====
 FROM docker.m.daocloud.io/library/rust:1.87-slim-bookworm AS chef
 
-RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+# 导入 Debian 最新 GPG 签名密钥后安装构建依赖
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt-get update -o Acquire::AllowInsecureRepositories=true \
+    && apt-get install -y --allow-unauthenticated debian-archive-keyring \
+    && apt-get update \
+    && apt-get install -y pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # 使用中科大 crates.io 镜像
 RUN mkdir -p /usr/local/cargo/registry \
@@ -28,7 +34,13 @@ RUN cargo build --release
 # ===== 阶段 3：运行 =====
 FROM docker.m.daocloud.io/library/debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+# 导入 Debian 最新 GPG 签名密钥后安装运行依赖
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt-get update -o Acquire::AllowInsecureRepositories=true \
+    && apt-get install -y --allow-unauthenticated debian-archive-keyring \
+    && apt-get update \
+    && apt-get install -y ca-certificates libssl3 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY --from=builder /app/target/release/gongs-credit .
