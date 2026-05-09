@@ -2,32 +2,30 @@ FROM docker.m.daocloud.io/library/rust:1.87-slim-bookworm AS builder
 
 WORKDIR /app
 
-# 使用国内 cargo 镜像
-ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
-ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
-
+# rust 国内源
 RUN mkdir -p /root/.cargo && \
     printf '[source.crates-io]\nreplace-with = "rsproxy"\n\n[source.rsproxy]\nregistry = "sparse+https://rsproxy.cn/index/"\n' > /root/.cargo/config.toml
 
-# 先复制依赖文件
+# 禁止并行编译
+ENV CARGO_BUILD_JOBS=1
+ENV RUSTFLAGS="-C codegen-units=1"
+
+# 先缓存依赖
 COPY Cargo.toml Cargo.lock ./
 
-# 创建假项目缓存依赖
 RUN mkdir src && \
     echo "fn main() {}" > src/main.rs && \
-    cargo build --release && \
-    rm -rf src target/release/deps/*
+    cargo build --release -j 1 && \
+    rm -rf src
 
 # 复制正式代码
 COPY . .
 
-# 编译
-RUN cargo build --release
+# 正式构建
+RUN cargo build --release -j 1
 
-# =========================
 # runtime
-# =========================
-FROM scratch
+FROM docker.m.daocloud.io/library/debian:bookworm-slim
 
 WORKDIR /app
 
@@ -35,4 +33,4 @@ COPY --from=builder /app/target/release/gongs-credit /app/gongs-credit
 
 EXPOSE 8080
 
-CMD ["/app/gongs-credit"]
+CMD ["./gongs-credit"]
