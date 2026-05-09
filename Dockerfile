@@ -6,9 +6,9 @@ FROM docker.m.daocloud.io/library/rust:1.88-slim-bullseye AS builder
 WORKDIR /app
 
 # 安装编译所需的系统依赖 (pkg-config 和 libssl-dev)
-# 替换 apt 源为清华源加速国内下载
-RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list \
-    && sed -i 's|security.debian.org/debian-security|mirrors.tuna.tsinghua.edu.cn/debian-security|g' /etc/apt/sources.list \
+# 替换 apt 源为阿里云源加速国内下载
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
+    && sed -i 's|security.debian.org/debian-security|mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list \
     && apt-get update \
     && apt-get install -y pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -41,8 +41,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM docker.m.daocloud.io/library/debian:bullseye-slim
 
 # 安装运行时的系统依赖 (OpenSSL 动态库和 CA 证书，供 reqwest 等使用)
-RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list \
-    && sed -i 's|security.debian.org/debian-security|mirrors.tuna.tsinghua.edu.cn/debian-security|g' /etc/apt/sources.list \
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
+    && sed -i 's|security.debian.org/debian-security|mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list \
     && apt-get update \
     && apt-get install -y libssl1.1 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
