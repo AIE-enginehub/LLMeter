@@ -70,6 +70,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/logs", get(list_logs))
         .route("/api/logs/{id}", get(get_log))
         .route("/api/stats", get(get_stats))
+        // 积分系统
+        .route("/api/settings/credit_rates", get(get_credit_rates).put(update_credit_rates))
+        .route("/api/orgs/{id}/credit", post(recharge_credit))
+        .route("/api/orgs/{id}/credit_logs", get(list_credit_logs))
 }
 
 // ============================================================
@@ -81,6 +85,7 @@ struct OrgRow {
     id: Uuid,
     name: String,
     slug: String,
+    credit: rust_decimal::Decimal,
     is_active: bool,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -141,6 +146,7 @@ struct LogRow {
     total_tokens: Option<i32>,
     duration_ms: Option<i32>,
     error_message: Option<String>,
+    credit_cost: Option<rust_decimal::Decimal>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -164,6 +170,7 @@ struct LogSummaryRow {
     total_tokens: Option<i32>,
     duration_ms: Option<i32>,
     error_message: Option<String>,
+    credit_cost: Option<rust_decimal::Decimal>,
     created_at: DateTime<Utc>,
 }
 
@@ -287,7 +294,7 @@ async fn list_orgs(
     _admin: AuthAdmin,
 ) -> Result<Json<Vec<OrgRow>>, (StatusCode, Json<ErrorResponse>)> {
     let rows = sqlx::query_as::<_, OrgRow>(
-        "SELECT id, name, slug, is_active, created_at, updated_at FROM organizations ORDER BY created_at DESC",
+        "SELECT id, name, slug, credit, is_active, created_at, updated_at FROM organizations ORDER BY created_at DESC",
     )
     .fetch_all(&state.pool)
     .await
@@ -304,7 +311,7 @@ async fn create_org(
 ) -> Result<(StatusCode, Json<OrgRow>), (StatusCode, Json<ErrorResponse>)> {
     let row = sqlx::query_as::<_, OrgRow>(
         "INSERT INTO organizations (name, slug) VALUES ($1, $2) \
-         RETURNING id, name, slug, is_active, created_at, updated_at",
+         RETURNING id, name, slug, credit, is_active, created_at, updated_at",
     )
     .bind(&body.name)
     .bind(&body.slug)
@@ -329,7 +336,7 @@ async fn update_org(
             is_active = COALESCE($4, is_active), \
             updated_at = now() \
          WHERE id = $1 \
-         RETURNING id, name, slug, is_active, created_at, updated_at",
+         RETURNING id, name, slug, credit, is_active, created_at, updated_at",
     )
     .bind(id)
     .bind(&body.name)
@@ -680,7 +687,7 @@ async fn list_logs(
         "SELECT id, org_id, api_key_id, provider, model, path, method, is_stream, \
                 response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
                 (COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0) + COALESCE(cached_tokens, 0)) AS total_tokens, \
-                duration_ms, error_message, created_at \
+                duration_ms, error_message, credit_cost, created_at \
          FROM request_logs {where_clause} \
          ORDER BY created_at DESC \
          LIMIT ${param_idx} OFFSET ${}",
@@ -725,7 +732,7 @@ async fn get_log(
         "SELECT id, org_id, api_key_id, provider, model, path, method, is_stream, \
                 request_body, response_body, response_status, status, \
                 prompt_tokens, completion_tokens, cached_tokens, total_tokens, \
-                duration_ms, error_message, created_at, updated_at \
+                duration_ms, error_message, credit_cost, created_at, updated_at \
          FROM request_logs WHERE id = $1",
     )
     .bind(id)
@@ -738,8 +745,114 @@ async fn get_log(
 }
 
 // ============================================================
-// 统计 API
+// 积分系统 API
 // ============================================================
+
+#[derive(Serialize, sqlx::FromRow)]
+struct CreditLogSummary {
+    id: Uuid,
+    org_id: Uuid,
+    amount: rust_decimal::Decimal,
+    balance_after: rust_decimal::Decimal,
+    transaction_type: String,
+    reference_id: Option<String>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Deserialize)]
+struct RechargeRequest {
+    amount: rust_decimal::Decimal,
+    note: Option<String>,
+}
+
+/// GET /api/settings/credit_rates
+async fn get_credit_rates(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+) -> Result<Json<crate::db::CreditRates>, (StatusCode, Json<ErrorResponse>)> {
+    let rates = crate::db::get_credit_rates(&state.pool).await;
+    Ok(Json(rates))
+}
+
+/// PUT /api/settings/credit_rates
+async fn update_credit_rates(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+    Json(body): Json<crate::db::CreditRates>,
+) -> Result<Json<crate::db::CreditRates>, (StatusCode, Json<ErrorResponse>)> {
+    let val = serde_json::to_value(&body).unwrap();
+    sqlx::query(
+        "INSERT INTO global_settings (key, value) VALUES ('credit_rates', $1) \
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"
+    )
+    .bind(val)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(body))
+}
+
+/// POST /api/orgs/:id/credit
+async fn recharge_credit(
+    State(state): State<Arc<AppState>>,
+    admin: AuthAdmin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<RechargeRequest>,
+) -> Result<Json<OrgRow>, (StatusCode, Json<ErrorResponse>)> {
+    if body.amount.is_zero() {
+        return Err(err(StatusCode::BAD_REQUEST, "Amount cannot be zero"));
+    }
+
+    let mut tx = state.pool.begin().await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let row = sqlx::query_as::<_, OrgRow>(
+        "UPDATE organizations SET credit = credit + $1, updated_at = now() WHERE id = $2 \
+         RETURNING id, name, slug, credit, is_active, created_at, updated_at"
+    )
+    .bind(body.amount)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Organization not found"))?;
+
+    let ref_id = body.note.unwrap_or_else(|| format!("admin:{}", admin.user_id));
+
+    sqlx::query(
+        "INSERT INTO credit_logs (org_id, amount, balance_after, transaction_type, reference_id) \
+         VALUES ($1, $2, $3, 'recharge', $4)"
+    )
+    .bind(id)
+    .bind(body.amount)
+    .bind(row.credit)
+    .bind(ref_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    tx.commit().await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(row))
+}
+
+/// GET /api/orgs/:id/credit_logs
+async fn list_credit_logs(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<CreditLogSummary>>, (StatusCode, Json<ErrorResponse>)> {
+    let rows = sqlx::query_as::<_, CreditLogSummary>(
+        "SELECT id, org_id, amount, balance_after, transaction_type, reference_id, created_at \
+         FROM credit_logs WHERE org_id = $1 ORDER BY created_at DESC LIMIT 100"
+    )
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(rows))
+}
 
 #[derive(Deserialize)]
 struct StatsQuery {

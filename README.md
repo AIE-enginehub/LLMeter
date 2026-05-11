@@ -1,134 +1,91 @@
 # Gongs Credit
 
-AI API 代理网关 —— 统一代理转发各 AI 厂商 API，支持多组织管理、API Key 分发、用量统计与请求日志追踪。
+[English](README.md) | [中文](README_zh.md)
 
-## 特性
+An AI API Proxy Gateway — Unify, proxy, and forward APIs from various AI providers. Features multi-organization management, API Key distribution, usage statistics, request log tracking, and a credit billing system.
 
-- **统一代理**：兼容 OpenAI / Gemini 等主流 AI 厂商 API 协议，调用方只需替换 `base_url` 即可无缝接入
-- **多组织管理**：支持为不同团队 / 客户创建独立组织，各组织拥有独立的 API Key 和模型配置
-- **API Key 管理**：安全生成和分发 API Key（`gc-` 前缀），存储 SHA-256 哈希，仅创建时可见完整 Key
-- **模型路由**：支持通配符匹配（如 `gpt-*`、`gemini-*`），按优先级自动路由到对应厂商
-- **用量统计**：实时记录每次请求的 Token 用量（prompt / completion / cached），支持按组织、模型、日期维度聚合
-- **请求日志**：完整记录请求/响应内容，支持分页查询和多条件筛选
-- **管理后台**：内置 Web 管理界面，提供组织、Key、模型配置、日志查看等功能
-- **流式支持**：完整支持 SSE 流式响应，代理过程中实时转发
+## 🌟 Features
 
-## 快速开始（Docker Compose）
+- **Unified Proxy**: Compatible with standard AI API protocols like OpenAI, Gemini, and Anthropic. Clients only need to change the `base_url` for seamless integration.
+- **Multi-Organization**: Support creating independent organizations for different teams or clients. Each organization has its own API Keys and model configurations.
+- **Credit System**: Built-in credit billing system. Customize deduction rates for different token types (prompt, completion, cached). Automatically blocks requests when credits are exhausted.
+- **API Key Management**: Securely generate and distribute API Keys (with `gc-` prefix). Stores SHA-256 hashes; the full key is only visible upon creation.
+- **Model Routing**: Supports wildcard matching (e.g., `gpt-*`, `gemini-*`) and automatically routes requests to the corresponding provider based on priority.
+- **Usage Statistics**: Real-time tracking of token usage (prompt / completion / cached) per request. Aggregates data by organization, model, and date.
+- **Request Logs**: Fully records request and response payloads. Supports pagination and multi-condition filtering.
+- **Admin Dashboard**: Modern built-in Web UI (supports English and Chinese) for managing organizations, keys, models, logs, and system settings.
+- **Streaming Support**: Fully supports SSE (Server-Sent Events) streaming responses, forwarding chunks in real-time.
+- **High Performance**: Built with Rust (Axum + Tokio) for extremely low memory footprint and high concurrency.
+
+## 🚀 Quick Start (Docker Compose)
+
+The easiest way to get started is using Docker Compose.
 
 ```bash
-# 克隆项目
-git clone <your-repo-url>
+# 1. Clone the repository
+git clone https://github.com/your-repo/gongs-credit.git
 cd gongs-credit
 
-# 复制并编辑环境变量
-cp .env.example .env
-# 按需修改 .env 中的配置
-
-# 启动服务（包含 PostgreSQL + 应用）
+# 2. Start the services (PostgreSQL + App)
 docker compose up -d
 
-# 查看日志
+# 3. View logs
 docker compose logs -f app
 ```
 
-启动后访问 `http://localhost:3000` 进入管理后台。
+After starting, access the admin dashboard at `http://localhost:5000`.
 
-默认管理员：`admin` / `admin123`（请在生产环境中修改 `ADMIN_INITIAL_PASSWORD`）
+Default admin credentials: Username: `admin` / Password: `admin123` (Please change `ADMIN_INITIAL_PASSWORD` in `.env` or `docker-compose.yml` for production).
 
-## 本地开发（Rust 环境）
+## 🛠️ Local Development (From Source)
 
-### 前置要求
+### Prerequisites
 
-- Rust 1.87+
+- Rust 1.88+
 - PostgreSQL 16+
 
-### 步骤
+### Steps
 
 ```bash
-# 安装 Rust（如未安装）
+# 1. Install Rust (if not already installed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# 配置环境变量
+# 2. Configure environment variables
 cp .env.example .env
-# 编辑 .env，确保 DATABASE_URL 指向本地 PostgreSQL
+# Edit .env and ensure DATABASE_URL points to your PostgreSQL instance
+# Example: DATABASE_URL=postgres://postgres:password@localhost:5432/gongs_credit
 
-# 编译并运行
+# 3. Build and run
 cargo run
 
-# 或编译 release 版本
+# Or build the release version
 cargo build --release
 ./target/release/gongs-credit
 ```
 
-服务启动后会自动执行数据库迁移并创建默认管理员用户。
+The service will automatically run database migrations and create the default admin user upon startup.
 
-## 环境变量说明
+## ⚙️ Environment Variables
 
-| 变量名 | 必需 | 默认值 | 说明 |
+| Variable | Required | Default | Description |
 |---|---|---|---|
-| `DATABASE_URL` | 是 | - | PostgreSQL 连接字符串 |
-| `AUTH_SECRET` | 是 | - | JWT 签名密钥，生产环境请使用强随机字符串 |
-| `ADMIN_INITIAL_PASSWORD` | 否 | `admin123` | 初始管理员密码 |
-| `PORT` | 否 | `3000` | 服务监听端口 |
-| `ROUTE_{NAME}_MODELS` | 否 | - | 模型匹配模式，逗号分隔，支持 `*` 通配符 |
-| `ROUTE_{NAME}_BASE_URL` | 否 | - | 对应厂商的 API 根地址 |
+| `DATABASE_URL` | Yes | - | PostgreSQL connection string |
+| `AUTH_SECRET` | Yes | - | JWT signature secret. Use a strong random string in production |
+| `ADMIN_INITIAL_PASSWORD` | No | `admin123` | Initial admin password |
+| `PORT` | No | `5000` | Port the service listens on |
 
-## API 概要
+## 🔌 Proxy Usage Example
 
-### 认证
+The proxy interface is compatible with original AI provider APIs. Just point your SDK's `base_url` to this service:
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| POST | `/api/auth/login` | 管理员登录，返回 JWT Token |
-| POST | `/api/auth/logout` | 登出，清除 Cookie |
-| GET | `/api/auth/me` | 获取当前登录用户信息 |
-
-### 组织管理
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/api/orgs` | 列出所有组织 |
-| POST | `/api/orgs` | 创建组织 |
-| PUT | `/api/orgs/{id}` | 更新组织 |
-| DELETE | `/api/orgs/{id}` | 删除组织 |
-
-### API Key 管理
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/api/orgs/{org_id}/keys` | 列出组织的 API Key |
-| POST | `/api/orgs/{org_id}/keys` | 创建 API Key（完整 Key 仅返回一次） |
-| DELETE | `/api/keys/{id}` | 禁用 API Key |
-
-### 模型配置
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/api/orgs/{org_id}/models` | 列出组织的模型配置 |
-| POST | `/api/orgs/{org_id}/models` | 创建模型配置 |
-| PUT | `/api/models/{id}` | 更新模型配置 |
-| DELETE | `/api/models/{id}` | 删除模型配置 |
-
-### 日志与统计
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/api/logs` | 分页查询请求日志 |
-| GET | `/api/logs/{id}` | 日志详情 |
-| GET | `/api/stats` | 统计数据（支持按天数、组织筛选） |
-
-### 代理调用
-
-代理接口兼容原始 AI 厂商 API，只需将 SDK 的 `base_url` 指向本服务即可：
+### Python (OpenAI SDK)
 
 ```python
 from openai import OpenAI
 
-# 原来：https://api.openai.com/v1
-# 现在：http://localhost:3000/v1
 client = OpenAI(
-    base_url="http://localhost:3000/v1",
-    api_key="gc-xxxxxxxx"  # 在管理后台创建的 API Key
+    base_url="http://localhost:5000/v1",
+    api_key="gc-xxxxxxxx"  # API Key created in the admin dashboard
 )
 
 response = client.chat.completions.create(
@@ -137,11 +94,13 @@ response = client.chat.completions.create(
 )
 ```
 
+### Node.js (OpenAI SDK)
+
 ```typescript
 import OpenAI from "openai";
 
 const client = new OpenAI({
-  baseURL: "http://localhost:3000/v1",
+  baseURL: "http://localhost:5000/v1",
   apiKey: "gc-xxxxxxxx",
 });
 
@@ -151,8 +110,8 @@ const response = await client.chat.completions.create({
 });
 ```
 
-Gemini 等其他厂商同理，系统根据请求中的模型名自动匹配路由规则并转发到对应厂商。
+The same applies to Gemini and other providers. The system automatically matches routing rules based on the requested model name and forwards it to the correct provider.
 
-## 许可证
+## 📄 License
 
-MIT
+MIT License

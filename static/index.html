@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>gongs-credit 管理后台</title>
+  <title>gongs-credit</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
   <style>
@@ -39,6 +39,54 @@
 
 <!-- ========== 全局应用状态 ========== -->
 <div x-data="app()" x-cloak class="min-h-screen">
+  <!-- 全局 Toast 提示组件 -->
+  <div class="fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-2 pointer-events-none">
+    <template x-for="toast in toasts" :key="toast.id">
+      <div x-show="toast.show" 
+           x-transition:enter="transition ease-out duration-300"
+           x-transition:enter-start="opacity-0 -translate-y-4"
+           x-transition:enter-end="opacity-100 translate-y-0"
+           x-transition:leave="transition ease-in duration-200"
+           x-transition:leave-start="opacity-100 translate-y-0"
+           x-transition:leave-end="opacity-0 -translate-y-4"
+           class="px-4 py-2.5 rounded-lg shadow-lg border flex items-center gap-2 pointer-events-auto"
+           :class="{
+             'bg-white border-slate-200 text-slate-800': toast.type === 'info',
+             'bg-emerald-50 border-emerald-200 text-emerald-800': toast.type === 'success',
+             'bg-amber-50 border-amber-200 text-amber-800': toast.type === 'warning',
+             'bg-red-50 border-red-200 text-red-800': toast.type === 'error'
+           }">
+        <template x-if="toast.type === 'success'">
+          <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+        </template>
+        <template x-if="toast.type === 'error'">
+          <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </template>
+        <span class="text-sm font-medium" x-text="toast.message"></span>
+      </div>
+    </template>
+  </div>
+
+  <!-- 全局确认弹窗 -->
+  <template x-if="confirmDialog.show">
+    <div class="fixed inset-0 z-[110] flex items-center justify-center anim-fade-in" @click.self="confirmDialog.show = false; confirmDialog.resolve && confirmDialog.resolve(false)">
+      <div class="absolute inset-0 bg-slate-900/20 backdrop-blur-sm"></div>
+      <div class="relative bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-sm p-6 anim-slide-in">
+        <div class="flex items-start gap-3 mb-5">
+          <div class="flex-shrink-0 w-9 h-9 rounded-full bg-amber-50 flex items-center justify-center">
+            <svg class="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+          </div>
+          <p class="text-sm text-slate-700 pt-1.5" x-text="confirmDialog.message"></p>
+        </div>
+        <div class="flex justify-end gap-2">
+          <button @click="confirmDialog.show = false; confirmDialog.resolve && confirmDialog.resolve(false)"
+            class="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 transition" x-text="t('cancel')"></button>
+          <button @click="confirmDialog.show = false; confirmDialog.resolve && confirmDialog.resolve(true)"
+            class="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-500 transition" x-text="t('confirm_action')"></button>
+        </div>
+      </div>
+    </div>
+  </template>
 
   <!-- ==================== 登录页 ==================== -->
   <template x-if="!user">
@@ -57,23 +105,23 @@
               <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
             </div>
             <h1 class="text-xl font-bold text-slate-800">gongs-credit</h1>
-            <p class="text-sm text-slate-400 mt-1">API 网关管理后台</p>
+            <p class="text-sm text-slate-400 mt-1" x-text="t('subtitle')"></p>
           </div>
 
           <!-- 表单 -->
           <form @submit.prevent="login()">
             <div class="space-y-4">
               <div>
-                <label class="block text-sm font-medium text-slate-600 mb-1.5">用户名</label>
+                <label class="block text-sm font-medium text-slate-600 mb-1.5" x-text="t('username')"></label>
                 <input x-model="loginForm.username" type="text" required
                   class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 focus:border-slate-400 transition"
-                  placeholder="请输入用户名">
+                  :placeholder="t('username')">
               </div>
               <div>
-                <label class="block text-sm font-medium text-slate-600 mb-1.5">密码</label>
+                <label class="block text-sm font-medium text-slate-600 mb-1.5" x-text="t('password')"></label>
                 <input x-model="loginForm.password" type="password" required
                   class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 focus:border-slate-400 transition"
-                  placeholder="请输入密码">
+                  :placeholder="t('password')">
               </div>
             </div>
             <template x-if="loginError">
@@ -81,10 +129,10 @@
             </template>
             <button type="submit" :disabled="loginLoading"
               class="mt-6 w-full py-2.5 bg-gradient-to-r from-slate-700 to-slate-800 text-white text-sm font-medium rounded-lg hover:from-slate-800 hover:to-slate-900 transition-all disabled:opacity-60 shadow-sm">
-              <span x-show="!loginLoading">登 录</span>
+              <span x-show="!loginLoading" x-text="t('login')"></span>
               <span x-show="loginLoading" class="inline-flex items-center gap-2">
                 <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-                登录中…
+                <span x-text="t('logging_in')"></span>
               </span>
             </button>
           </form>
@@ -108,18 +156,24 @@
               <span class="font-bold text-slate-800 text-sm hidden sm:block">gongs-credit</span>
             </div>
             <div class="flex gap-1">
-              <template x-for="t in tabs" :key="t.key">
-                <button @click="tab = t.key"
-                  :class="tab === t.key ? 'bg-slate-100 text-slate-800 font-medium' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'"
-                  class="px-3 py-1.5 rounded-lg text-sm transition-all" x-text="t.label">
+              <template x-for="tabItem in tabs" :key="tabItem.key">
+                <button @click="tab = tabItem.key"
+                  :class="tab === tabItem.key ? 'bg-slate-100 text-slate-800 font-medium' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'"
+                  class="px-3 py-1.5 rounded-lg text-sm transition-all" x-text="t(tabItem.label)">
                 </button>
               </template>
             </div>
           </div>
           <!-- 用户 + 退出 -->
           <div class="flex items-center gap-3">
+            
+            <button @click="window.toggleLang()" class="text-xs text-slate-500 hover:text-slate-700 transition px-2 py-1 rounded hover:bg-slate-100 flex items-center gap-1">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129"/></svg>
+              <span x-text="t('lang')"></span>
+            </button>
+
             <span class="text-xs text-slate-400" x-text="user.username"></span>
-            <button @click="logout()" class="text-xs text-slate-400 hover:text-red-500 transition px-2 py-1 rounded hover:bg-red-50">退出</button>
+            <button @click="logout()" class="text-xs text-slate-400 hover:text-red-500 transition px-2 py-1 rounded hover:bg-red-50" x-text="t('logout')"></button>
           </div>
         </div>
       </nav>
@@ -131,12 +185,12 @@
         <div x-show="tab === 'overview'" x-transition class="anim-fade-in-up" x-data="overviewTab()" x-init="load()">
           <!-- 天数切换 -->
           <div class="flex items-center justify-between mb-6">
-            <h2 class="text-lg font-semibold text-slate-800">数据概览</h2>
+            <h2 class="text-lg font-semibold text-slate-800" x-text="t('overview')"></h2>
             <div class="flex bg-white border border-slate-200 rounded-lg p-0.5">
               <template x-for="d in [7, 14, 30]" :key="d">
                 <button @click="days = d; load()"
                   :class="days === d ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'"
-                  class="px-3 py-1 text-xs rounded-md font-medium transition-all" x-text="d + '天'">
+                  class="px-3 py-1 text-xs rounded-md font-medium transition-all" x-text="t('days', d)">
                 </button>
               </template>
             </div>
@@ -152,28 +206,28 @@
               <!-- 统计卡片 -->
               <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
                 <div class="bg-gradient-to-br from-blue-50 to-white border border-blue-100/60 rounded-xl p-4 anim-fade-in-up">
-                  <p class="text-xs text-blue-500/80 font-medium">总请求</p>
+                  <p class="text-xs text-blue-500/80 font-medium" x-text="t('total_req')"></p>
                   <p class="text-2xl font-bold text-slate-800 mt-1" x-text="formatNum(stats.overview.total_requests)"></p>
                 </div>
                 <div class="bg-gradient-to-br from-emerald-50 to-white border border-emerald-100/60 rounded-xl p-4 anim-fade-in-up anim-delay-1">
-                  <p class="text-xs text-emerald-500/80 font-medium">成功</p>
+                  <p class="text-xs text-emerald-500/80 font-medium" x-text="t('success')"></p>
                   <p class="text-2xl font-bold text-slate-800 mt-1" x-text="formatNum(stats.overview.success_requests)"></p>
                 </div>
                 <div class="bg-gradient-to-br from-red-50 to-white border border-red-100/60 rounded-xl p-4 anim-fade-in-up anim-delay-2">
-                  <p class="text-xs text-red-400/80 font-medium">错误</p>
+                  <p class="text-xs text-red-400/80 font-medium" x-text="t('error')"></p>
                   <p class="text-2xl font-bold text-slate-800 mt-1" x-text="formatNum(stats.overview.error_requests)"></p>
                 </div>
                 <div class="bg-gradient-to-br from-violet-50 to-white border border-violet-100/60 rounded-xl p-4 anim-fade-in-up anim-delay-3">
-                  <p class="text-xs text-violet-500/80 font-medium">总 Token</p>
+                  <p class="text-xs text-violet-500/80 font-medium" x-text="t('total_token')"></p>
                   <p class="text-2xl font-bold text-slate-800 mt-1" x-text="fmtToken(stats.overview.total_tokens)"></p>
                   <p class="text-[10px] text-slate-500 mt-1">
-                    入<span x-text="fmtToken(stats.overview.prompt_tokens)"></span> · 
-                    出<span x-text="fmtToken(stats.overview.completion_tokens)"></span> · 
-                    存<span x-text="fmtToken(stats.overview.cached_tokens)"></span>
+                    <span x-text="t('in')"></span><span x-text="fmtToken(stats.overview.prompt_tokens)"></span> · 
+                    <span x-text="t('out')"></span><span x-text="fmtToken(stats.overview.completion_tokens)"></span> · 
+                    <span x-text="t('cache')"></span><span x-text="fmtToken(stats.overview.cached_tokens)"></span>
                   </p>
                 </div>
                 <div class="bg-gradient-to-br from-amber-50 to-white border border-amber-100/60 rounded-xl p-4 anim-fade-in-up anim-delay-4">
-                  <p class="text-xs text-amber-500/80 font-medium">平均耗时</p>
+                  <p class="text-xs text-amber-500/80 font-medium" x-text="t('avg_time')"></p>
                   <p class="text-2xl font-bold text-slate-800 mt-1"><span x-text="Math.round(stats.overview.avg_duration_ms)"></span><span class="text-sm font-normal text-slate-400">ms</span></p>
                 </div>
               </div>
@@ -181,10 +235,10 @@
               <!-- 按服务商 / 模型统计 -->
               <div class="grid lg:grid-cols-2 gap-6">
                 <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm anim-fade-in-up anim-delay-3">
-                  <div class="px-5 py-4 border-b border-slate-100"><h3 class="text-sm font-semibold text-slate-700">按服务商</h3></div>
+                  <div class="px-5 py-4 border-b border-slate-100"><h3 class="text-sm font-semibold text-slate-700" x-text="t('by_provider')"></h3></div>
                   <div class="overflow-x-auto">
                     <table class="w-full text-sm">
-                      <thead><tr class="text-xs text-slate-400 border-b border-slate-100"><th class="text-left px-5 py-2.5 font-medium">服务商</th><th class="text-right px-5 py-2.5 font-medium">请求数</th><th class="text-right px-5 py-2.5 font-medium">Token</th><th class="text-right px-5 py-2.5 font-medium">错误</th></tr></thead>
+                      <thead><tr class="text-xs text-slate-400 border-b border-slate-100"><th class="text-left px-5 py-2.5 font-medium" x-text="t('provider')"></th><th class="text-right px-5 py-2.5 font-medium" x-text="t('req_count')"></th><th class="text-right px-5 py-2.5 font-medium">Token</th><th class="text-right px-5 py-2.5 font-medium" x-text="t('error')"></th></tr></thead>
                       <tbody>
                         <template x-for="p in stats.by_provider" :key="p.provider">
                           <tr class="border-b border-slate-50 hover:bg-blue-50/50 transition">
@@ -192,22 +246,22 @@
                             <td class="px-5 py-2.5 text-right text-slate-600" x-text="formatNum(p.request_count)"></td>
                             <td class="px-5 py-2.5 text-right text-slate-600">
                             <div x-text="fmtToken(p.total_tokens)"></div>
-                            <div class="text-[10px] text-slate-400 mt-0.5">入<span x-text="fmtToken(p.prompt_tokens)"></span> · 出<span x-text="fmtToken(p.completion_tokens)"></span> · 存<span x-text="fmtToken(p.cached_tokens)"></span></div>
+                            <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(p.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(p.completion_tokens)"></span> · <span x-text="t('cache')"></span><span x-text="fmtToken(p.cached_tokens)"></span></div>
                           </td>
                             <td class="px-5 py-2.5 text-right"><span :class="p.error_count > 0 ? 'text-red-500' : 'text-slate-400'" x-text="p.error_count"></span></td>
                           </tr>
                         </template>
                       </tbody>
                     </table>
-                    <template x-if="stats.by_provider.length === 0"><p class="text-center text-slate-400 text-sm py-8">暂无数据</p></template>
+                    <template x-if="stats.by_provider.length === 0"><p class="text-center text-slate-400 text-sm py-8" x-text="t('no_data')"></p></template>
                   </div>
                 </div>
 
                 <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm anim-fade-in-up anim-delay-4">
-                  <div class="px-5 py-4 border-b border-slate-100"><h3 class="text-sm font-semibold text-slate-700">按模型</h3></div>
+                  <div class="px-5 py-4 border-b border-slate-100"><h3 class="text-sm font-semibold text-slate-700" x-text="t('by_model')"></h3></div>
                   <div class="overflow-x-auto">
                     <table class="w-full text-sm">
-                      <thead><tr class="text-xs text-slate-400 border-b border-slate-100"><th class="text-left px-5 py-2.5 font-medium">模型</th><th class="text-right px-5 py-2.5 font-medium">请求数</th><th class="text-right px-5 py-2.5 font-medium">Token</th><th class="text-right px-5 py-2.5 font-medium">平均耗时</th></tr></thead>
+                      <thead><tr class="text-xs text-slate-400 border-b border-slate-100"><th class="text-left px-5 py-2.5 font-medium" x-text="t('model')"></th><th class="text-right px-5 py-2.5 font-medium" x-text="t('req_count')"></th><th class="text-right px-5 py-2.5 font-medium">Token</th><th class="text-right px-5 py-2.5 font-medium" x-text="t('avg_time')"></th></tr></thead>
                       <tbody>
                         <template x-for="m in stats.by_model" :key="m.model">
                           <tr class="border-b border-slate-50 hover:bg-blue-50/50 transition">
@@ -215,14 +269,14 @@
                             <td class="px-5 py-2.5 text-right text-slate-600" x-text="formatNum(m.request_count)"></td>
                             <td class="px-5 py-2.5 text-right text-slate-600">
                             <div x-text="fmtToken(m.total_tokens)"></div>
-                            <div class="text-[10px] text-slate-400 mt-0.5">入<span x-text="fmtToken(m.prompt_tokens)"></span> · 出<span x-text="fmtToken(m.completion_tokens)"></span> · 存<span x-text="fmtToken(m.cached_tokens)"></span></div>
+                            <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(m.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(m.completion_tokens)"></span> · <span x-text="t('cache')"></span><span x-text="fmtToken(m.cached_tokens)"></span></div>
                           </td>
                             <td class="px-5 py-2.5 text-right text-slate-500"><span x-text="Math.round(m.avg_duration_ms)"></span>ms</td>
                           </tr>
                         </template>
                       </tbody>
                     </table>
-                    <template x-if="stats.by_model.length === 0"><p class="text-center text-slate-400 text-sm py-8">暂无数据</p></template>
+                    <template x-if="stats.by_model.length === 0"><p class="text-center text-slate-400 text-sm py-8" x-text="t('no_data')"></p></template>
                   </div>
                 </div>
               </div>
@@ -242,8 +296,8 @@
               <div class="w-64 flex-shrink-0">
                 <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm">
                   <div class="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-                    <h3 class="text-sm font-semibold text-slate-700">组织列表</h3>
-                    <button @click="showCreateOrg = true" class="text-xs px-2.5 py-1 bg-slate-800 text-white rounded-md hover:bg-slate-700 transition">新建</button>
+                    <h3 class="text-sm font-semibold text-slate-700" x-text="t('org_list')"></h3>
+                    <button @click="showCreateOrg = true" class="text-xs px-2.5 py-1 bg-slate-800 text-white rounded-md hover:bg-slate-700 transition" x-text="t('new')"></button>
                   </div>
                   <div class="p-2 max-h-[60vh] overflow-y-auto">
                     <template x-for="org in orgs" :key="org.id">
@@ -254,7 +308,7 @@
                         <span :class="org.is_active ? 'bg-emerald-400' : 'bg-slate-300'" class="w-1.5 h-1.5 rounded-full flex-shrink-0"></span>
                       </button>
                     </template>
-                    <template x-if="orgs.length === 0"><p class="text-center text-slate-400 text-xs py-4">暂无组织</p></template>
+                    <template x-if="orgs.length === 0"><p class="text-center text-slate-400 text-xs py-4" x-text="t('no_org')"></p></template>
                   </div>
                 </div>
               </div>
@@ -262,7 +316,7 @@
               <!-- 右侧详情 -->
               <div class="flex-1 min-w-0">
                 <template x-if="!selectedOrg">
-                  <div class="flex items-center justify-center h-64 text-slate-400 text-sm">选择左侧组织查看详情</div>
+                  <div class="flex items-center justify-center h-64 text-slate-400 text-sm" x-text="t('select_org')"></div>
                 </template>
 
                 <template x-if="selectedOrg">
@@ -270,27 +324,37 @@
                     <!-- 组织信息 -->
                     <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm">
                       <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-                        <h3 class="text-sm font-semibold text-slate-700">组织信息</h3>
+                        <h3 class="text-sm font-semibold text-slate-700" x-text="t('org_info')"></h3>
                         <div class="flex gap-2">
-                          <button @click="saveOrg()" class="text-xs px-3 py-1.5 bg-slate-800 text-white rounded-md hover:bg-slate-700 transition">保存</button>
-                          <button @click="deleteOrg()" class="text-xs px-3 py-1.5 text-red-500 border border-red-200 rounded-md hover:bg-red-50 transition">删除</button>
+                          <button @click="saveOrg()" class="text-xs px-3 py-1.5 bg-slate-800 text-white rounded-md hover:bg-slate-700 transition" x-text="t('save')"></button>
+                          <button @click="deleteOrg()" class="text-xs px-3 py-1.5 text-red-500 border border-red-200 rounded-md hover:bg-red-50 transition" x-text="t('delete')"></button>
                         </div>
                       </div>
-                      <div class="p-5 grid grid-cols-3 gap-4">
-                        <div>
-                          <label class="block text-xs text-slate-400 mb-1">名称</label>
-                          <input x-model="editOrg.name" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                      <div class="p-5 space-y-4">
+                        <div class="grid grid-cols-3 gap-4">
+                          <div>
+                            <label class="block text-xs text-slate-400 mb-1" x-text="t('name')"></label>
+                            <input x-model="editOrg.name" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                          </div>
+                          <div>
+                            <label class="block text-xs text-slate-400 mb-1" x-text="t('slug')"></label>
+                            <input x-model="editOrg.slug" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                          </div>
+                          <div>
+                            <label class="block text-xs text-slate-400 mb-1" x-text="t('status')"></label>
+                            <select x-model="editOrg.is_active" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                              <option value="true" x-text="t('enable')"></option>
+                              <option value="false" x-text="t('disable')"></option>
+                            </select>
+                          </div>
                         </div>
                         <div>
-                          <label class="block text-xs text-slate-400 mb-1">标识（slug）</label>
-                          <input x-model="editOrg.slug" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-                        </div>
-                        <div>
-                          <label class="block text-xs text-slate-400 mb-1">状态</label>
-                          <select x-model="editOrg.is_active" @change="editOrg.is_active = ($event.target.value === 'true')" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-                            <option value="true" :selected="editOrg.is_active === true">启用</option>
-                            <option value="false" :selected="editOrg.is_active === false">禁用</option>
-                          </select>
+                          <label class="block text-xs text-slate-400 mb-1" x-text="t('credit')"></label>
+                          <div class="flex items-center gap-3">
+                            <span class="text-lg font-semibold text-slate-800 min-w-[80px]" x-text="editOrg.credit != null ? Number(editOrg.credit).toFixed(4) : '0.0000'"></span>
+                            <button @click="showRecharge = true" class="px-3 py-1.5 bg-indigo-50 text-indigo-600 border border-indigo-200 rounded-lg text-xs hover:bg-indigo-100 transition whitespace-nowrap" x-text="t('recharge')"></button>
+                            <button @click="loadCreditLogs()" class="px-3 py-1.5 bg-slate-50 text-slate-600 border border-slate-200 rounded-lg text-xs hover:bg-slate-100 transition whitespace-nowrap" x-text="t('flow')"></button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -299,53 +363,53 @@
                     <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm">
                       <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
                         <h3 class="text-sm font-semibold text-slate-700">API Key</h3>
-                        <button @click="showCreateKey = true" class="text-xs px-2.5 py-1 bg-slate-800 text-white rounded-md hover:bg-slate-700 transition">创建 Key</button>
+                        <button @click="showCreateKey = true" class="text-xs px-2.5 py-1 bg-slate-800 text-white rounded-md hover:bg-slate-700 transition" x-text="t('create_key')"></button>
                       </div>
                       <div class="overflow-x-auto">
                         <table class="w-full text-sm">
-                          <thead><tr class="text-xs text-slate-400 border-b border-slate-100"><th class="text-left px-5 py-2.5 font-medium">名称</th><th class="text-left px-5 py-2.5 font-medium">前缀</th><th class="text-left px-5 py-2.5 font-medium">状态</th><th class="text-left px-5 py-2.5 font-medium">创建时间</th><th class="text-right px-5 py-2.5 font-medium">操作</th></tr></thead>
+                          <thead><tr class="text-xs text-slate-400 border-b border-slate-100"><th class="text-left px-5 py-2.5 font-medium" x-text="t('name')"></th><th class="text-left px-5 py-2.5 font-medium" x-text="t('prefix')"></th><th class="text-left px-5 py-2.5 font-medium" x-text="t('status')"></th><th class="text-left px-5 py-2.5 font-medium" x-text="t('created_at')"></th><th class="text-right px-5 py-2.5 font-medium" x-text="t('action')"></th></tr></thead>
                           <tbody>
                             <template x-for="k in keys" :key="k.id">
                               <tr class="border-b border-slate-50 hover:bg-blue-50/50 transition">
                                 <td class="px-5 py-2.5 text-slate-700" x-text="k.name"></td>
                                 <td class="px-5 py-2.5 font-mono text-xs text-slate-500" x-text="k.key_prefix + '...'"></td>
-                                <td class="px-5 py-2.5"><span :class="k.is_active ? 'text-emerald-600 bg-emerald-50' : 'text-slate-400 bg-slate-100'" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"><span :class="k.is_active ? 'bg-emerald-400' : 'bg-slate-300'" class="w-1.5 h-1.5 rounded-full"></span><span x-text="k.is_active ? '启用' : '禁用'"></span></span></td>
+                                <td class="px-5 py-2.5"><span :class="k.is_active ? 'text-emerald-600 bg-emerald-50' : 'text-slate-400 bg-slate-100'" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"><span :class="k.is_active ? 'bg-emerald-400' : 'bg-slate-300'" class="w-1.5 h-1.5 rounded-full"></span><span x-text="k.is_active ? t('enable') : t('disable')"></span></span></td>
                                 <td class="px-5 py-2.5 text-xs text-slate-400" x-text="fmtTime(k.created_at)"></td>
-                                <td class="px-5 py-2.5 text-right"><button @click="deleteKey(k.id)" class="text-xs text-red-400 hover:text-red-600 transition">删除</button></td>
+                                <td class="px-5 py-2.5 text-right"><button @click="deleteKey(k.id)" class="text-xs text-red-400 hover:text-red-600 transition" x-text="t('delete')"></button></td>
                               </tr>
                             </template>
                           </tbody>
                         </table>
-                        <template x-if="keys.length === 0"><p class="text-center text-slate-400 text-sm py-6">暂无 Key</p></template>
+                        <template x-if="keys.length === 0"><p class="text-center text-slate-400 text-sm py-6" x-text="t('no_key')"></p></template>
                       </div>
                     </div>
 
                     <!-- 模型配置管理 -->
                     <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm">
                       <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-                        <h3 class="text-sm font-semibold text-slate-700">模型配置</h3>
-                        <button @click="openModelForm()" class="text-xs px-2.5 py-1 bg-slate-800 text-white rounded-md hover:bg-slate-700 transition">添加配置</button>
+                        <h3 class="text-sm font-semibold text-slate-700" x-text="t('model_config')"></h3>
+                        <button @click="openModelForm()" class="text-xs px-2.5 py-1 bg-slate-800 text-white rounded-md hover:bg-slate-700 transition" x-text="t('add_config')"></button>
                       </div>
                       <div class="overflow-x-auto">
                         <table class="w-full text-sm">
-                          <thead><tr class="text-xs text-slate-400 border-b border-slate-100"><th class="text-left px-5 py-2.5 font-medium">名称</th><th class="text-left px-5 py-2.5 font-medium">协议</th><th class="text-left px-5 py-2.5 font-medium">模型标识</th><th class="text-left px-5 py-2.5 font-medium">优先级</th><th class="text-left px-5 py-2.5 font-medium">状态</th><th class="text-right px-5 py-2.5 font-medium">操作</th></tr></thead>
+                          <thead><tr class="text-xs text-slate-400 border-b border-slate-100"><th class="text-left px-5 py-2.5 font-medium" x-text="t('name')"></th><th class="text-left px-5 py-2.5 font-medium" x-text="t('protocol')"></th><th class="text-left px-5 py-2.5 font-medium" x-text="t('model_pattern')"></th><th class="text-left px-5 py-2.5 font-medium" x-text="t('priority')"></th><th class="text-left px-5 py-2.5 font-medium" x-text="t('status')"></th><th class="text-right px-5 py-2.5 font-medium" x-text="t('action')"></th></tr></thead>
                           <tbody>
                             <template x-for="m in models" :key="m.id">
                               <tr class="border-b border-slate-50 hover:bg-blue-50/50 transition">
                                 <td class="px-5 py-2.5 text-slate-700" x-text="m.name"></td>
                                 <td class="px-5 py-2.5"><span class="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-xs font-mono" x-text="m.protocol"></span></td>
-                                <td class="px-5 py-2.5 font-mono text-xs max-w-[200px] truncate" :class="m.model_patterns ? 'text-slate-500' : 'text-slate-300 italic'" x-text="m.model_patterns || '(按名称前缀匹配)'"></td>
+                                <td class="px-5 py-2.5 font-mono text-xs max-w-[200px] truncate" :class="m.model_patterns ? 'text-slate-500' : 'text-slate-300 italic'" x-text="m.model_patterns || t('match_by_name')"></td>
                                 <td class="px-5 py-2.5 text-slate-600" x-text="m.priority"></td>
-                                <td class="px-5 py-2.5"><span :class="m.is_active ? 'text-emerald-600 bg-emerald-50' : 'text-slate-400 bg-slate-100'" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"><span :class="m.is_active ? 'bg-emerald-400' : 'bg-slate-300'" class="w-1.5 h-1.5 rounded-full"></span><span x-text="m.is_active ? '启用' : '禁用'"></span></span></td>
+                                <td class="px-5 py-2.5"><span :class="m.is_active ? 'text-emerald-600 bg-emerald-50' : 'text-slate-400 bg-slate-100'" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"><span :class="m.is_active ? 'bg-emerald-400' : 'bg-slate-300'" class="w-1.5 h-1.5 rounded-full"></span><span x-text="m.is_active ? t('enable') : t('disable')"></span></span></td>
                                 <td class="px-5 py-2.5 text-right">
-                                  <button @click="openModelForm(m)" class="text-xs text-slate-500 hover:text-slate-700 mr-2 transition">编辑</button>
-                                  <button @click="deleteModel(m.id)" class="text-xs text-red-400 hover:text-red-600 transition">删除</button>
+                                  <button @click="openModelForm(m)" class="text-xs text-slate-500 hover:text-slate-700 mr-2 transition" x-text="t('edit')"></button>
+                                  <button @click="deleteModel(m.id)" class="text-xs text-red-400 hover:text-red-600 transition" x-text="t('delete')"></button>
                                 </td>
                               </tr>
                             </template>
                           </tbody>
                         </table>
-                        <template x-if="models.length === 0"><p class="text-center text-slate-400 text-sm py-6">暂无配置</p></template>
+                        <template x-if="models.length === 0"><p class="text-center text-slate-400 text-sm py-6" x-text="t('no_config')"></p></template>
                       </div>
                     </div>
                   </div>
@@ -359,20 +423,20 @@
             <div class="fixed inset-0 z-50 flex items-center justify-center anim-fade-in" @click.self="showCreateOrg = false">
               <div class="absolute inset-0 bg-slate-900/20 backdrop-blur-sm"></div>
               <div class="relative bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-md p-6 anim-slide-in">
-                <h3 class="text-base font-semibold text-slate-800 mb-4">创建组织</h3>
+                <h3 class="text-base font-semibold text-slate-800 mb-4" x-text="t('create_org')"></h3>
                 <div class="space-y-3">
                   <div>
-                    <label class="block text-xs text-slate-500 mb-1">名称</label>
-                    <input x-model="newOrg.name" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="组织名称">
+                    <label class="block text-xs text-slate-500 mb-1" x-text="t('name')"></label>
+                    <input x-model="newOrg.name" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" :placeholder="t('org_name_ph')">
                   </div>
                   <div>
-                    <label class="block text-xs text-slate-500 mb-1">标识（slug）</label>
-                    <input x-model="newOrg.slug" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="英文标识">
+                    <label class="block text-xs text-slate-500 mb-1" x-text="t('slug')"></label>
+                    <input x-model="newOrg.slug" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" :placeholder="t('slug_ph')">
                   </div>
                 </div>
                 <div class="flex justify-end gap-2 mt-5">
-                  <button @click="showCreateOrg = false" class="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 transition">取消</button>
-                  <button @click="createOrg()" class="px-4 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition">创建</button>
+                  <button @click="showCreateOrg = false" class="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 transition" x-text="t('cancel')"></button>
+                  <button @click="createOrg()" class="px-4 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition" x-text="t('confirm_create')"></button>
                 </div>
               </div>
             </div>
@@ -383,14 +447,14 @@
             <div class="fixed inset-0 z-50 flex items-center justify-center anim-fade-in" @click.self="showCreateKey = false">
               <div class="absolute inset-0 bg-slate-900/20 backdrop-blur-sm"></div>
               <div class="relative bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-md p-6 anim-slide-in">
-                <h3 class="text-base font-semibold text-slate-800 mb-4">创建 API Key</h3>
+                <h3 class="text-base font-semibold text-slate-800 mb-4" x-text="t('create_key')"></h3>
                 <div>
-                  <label class="block text-xs text-slate-500 mb-1">Key 名称</label>
-                  <input x-model="newKeyName" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="例如：production-key">
+                  <label class="block text-xs text-slate-500 mb-1" x-text="t('key_name')"></label>
+                  <input x-model="newKeyName" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" :placeholder="t('key_name_placeholder')">
                 </div>
                 <div class="flex justify-end gap-2 mt-5">
-                  <button @click="showCreateKey = false" class="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 transition">取消</button>
-                  <button @click="createKey()" class="px-4 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition">创建</button>
+                  <button @click="showCreateKey = false" class="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 transition" x-text="t('cancel')"></button>
+                  <button @click="createKey()" class="px-4 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition" x-text="t('confirm_create')"></button>
                 </div>
               </div>
             </div>
@@ -403,15 +467,15 @@
               <div class="relative bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-lg p-6 anim-slide-in">
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center"><svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg></div>
-                  <h3 class="text-base font-semibold text-slate-800">Key 创建成功</h3>
+                  <h3 class="text-base font-semibold text-slate-800" x-text="t('key_created')"></h3>
                 </div>
-                <p class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">请立即复制保存，此 Key 仅显示一次，关闭后无法再次查看。</p>
+                <p class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3" x-text="t('key_warning')"></p>
                 <div class="bg-slate-900 rounded-lg p-4 flex items-center justify-between gap-2">
                   <code class="text-sm text-emerald-400 break-all" x-text="createdKey.key"></code>
-                  <button @click="copyText(createdKey.key)" class="flex-shrink-0 text-xs text-slate-400 hover:text-white bg-slate-800 px-2.5 py-1 rounded transition">复制</button>
+                  <button @click="copyText(createdKey.key)" class="flex-shrink-0 text-xs text-slate-400 hover:text-white bg-slate-800 px-2.5 py-1 rounded transition" x-text="t('copy')"></button>
                 </div>
                 <div class="flex justify-end mt-4">
-                  <button @click="createdKey = null" class="px-4 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition">确认关闭</button>
+                  <button @click="createdKey = null" class="px-4 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition" x-text="t('close')"></button>
                 </div>
               </div>
             </div>
@@ -422,15 +486,15 @@
             <div class="fixed inset-0 z-50 flex items-center justify-center anim-fade-in" @click.self="showModelForm = false">
               <div class="absolute inset-0 bg-slate-900/20 backdrop-blur-sm"></div>
               <div class="relative bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-lg p-6 anim-slide-in">
-                <h3 class="text-base font-semibold text-slate-800 mb-4" x-text="modelForm.id ? '编辑模型配置' : '添加模型配置'"></h3>
+                <h3 class="text-base font-semibold text-slate-800 mb-4" x-text="modelForm.id ? t('edit_model') : t('add_config')"></h3>
                 <div class="space-y-3">
                   <div class="grid grid-cols-2 gap-3">
                     <div>
-                      <label class="block text-xs text-slate-500 mb-1">名称</label>
-                      <input x-model="modelForm.name" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="配置名称">
+                      <label class="block text-xs text-slate-500 mb-1" x-text="t('name')"></label>
+                      <input x-model="modelForm.name" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" :placeholder="t('config_name_ph')">
                     </div>
                     <div>
-                      <label class="block text-xs text-slate-500 mb-1">协议</label>
+                      <label class="block text-xs text-slate-500 mb-1" x-text="t('protocol')"></label>
                       <select x-model="modelForm.protocol" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
                         <option value="openai">OpenAI</option>
                         <option value="anthropic">Anthropic</option>
@@ -439,8 +503,8 @@
                     </div>
                   </div>
                   <div>
-                    <label class="block text-xs text-slate-500 mb-1">模型标识</label>
-                    <input x-model="modelForm.model_patterns" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="gpt-*,o1-* 逗号分隔，支持通配符">
+                    <label class="block text-xs text-slate-500 mb-1" x-text="t('model_pattern')"></label>
+                    <input x-model="modelForm.model_patterns" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" :placeholder="t('model_pattern_ph')">
                   </div>
                   <div>
                     <label class="block text-xs text-slate-500 mb-1">Base URL</label>
@@ -451,13 +515,77 @@
                     <input x-model="modelForm.real_api_key" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="sk-...">
                   </div>
                   <div>
-                    <label class="block text-xs text-slate-500 mb-1">优先级</label>
+                    <label class="block text-xs text-slate-500 mb-1" x-text="t('priority')"></label>
                     <input x-model.number="modelForm.priority" type="number" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="0">
                   </div>
                 </div>
                 <div class="flex justify-end gap-2 mt-5">
-                  <button @click="showModelForm = false" class="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 transition">取消</button>
-                  <button @click="saveModel()" class="px-4 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition" x-text="modelForm.id ? '保存' : '创建'"></button>
+                  <button @click="showModelForm = false" class="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 transition" x-text="t('cancel')"></button>
+                  <button @click="saveModel()" class="px-4 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition" x-text="modelForm.id ? t('save') : t('confirm_create')"></button>
+                </div>
+              </div>
+            </div>
+          </template>
+          <!-- 充值弹窗 -->
+          <template x-if="showRecharge">
+            <div class="fixed inset-0 z-50 flex items-center justify-center anim-fade-in" @click.self="showRecharge = false">
+              <div class="absolute inset-0 bg-slate-900/20 backdrop-blur-sm"></div>
+              <div class="relative bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-sm p-6 anim-slide-in">
+                <h3 class="text-base font-semibold text-slate-800 mb-4" x-text="t('recharge_credit')"></h3>
+                <div class="space-y-3">
+                  <div>
+                    <label class="block text-xs text-slate-500 mb-1" x-text="t('recharge_amount')"></label>
+                    <input x-model.number="rechargeAmount" type="number" step="0.0001" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" :placeholder="t('recharge_placeholder')">
+                  </div>
+                  <div>
+                    <label class="block text-xs text-slate-500 mb-1" x-text="t('note')"></label>
+                    <input x-model="rechargeNote" type="text" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" :placeholder="t('note_placeholder')">
+                  </div>
+                </div>
+                <div class="flex justify-end gap-2 mt-5">
+                  <button @click="showRecharge = false" class="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 transition" x-text="t('cancel')"></button>
+                  <button @click="rechargeCredit()" class="px-4 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition" x-text="t('confirm_recharge')"></button>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- 积分流水弹窗 -->
+          <template x-if="showCreditLogs">
+            <div class="fixed inset-0 z-50 flex items-center justify-center anim-fade-in" @click.self="showCreditLogs = false">
+              <div class="absolute inset-0 bg-slate-900/20 backdrop-blur-sm"></div>
+              <div class="relative bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-3xl max-h-[80vh] flex flex-col anim-slide-in">
+                <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                  <h3 class="text-base font-semibold text-slate-800" x-text="t('credit_flow')"></h3>
+                  <button @click="showCreditLogs = false" class="text-slate-400 hover:text-slate-600"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+                </div>
+                <div class="p-6 overflow-y-auto flex-1">
+                  <table class="w-full text-sm">
+                    <thead>
+                      <tr class="text-xs text-slate-400 border-b border-slate-100">
+                        <th class="text-left py-2 font-medium" x-text="t('time')"></th>
+                        <th class="text-left py-2 font-medium" x-text="t('type')"></th>
+                        <th class="text-right py-2 font-medium" x-text="t('amount_change')"></th>
+                        <th class="text-right py-2 font-medium" x-text="t('balance_after')"></th>
+                        <th class="text-left py-2 pl-4 font-medium" x-text="t('note')"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="log in creditLogs" :key="log.id">
+                        <tr class="border-b border-slate-50 hover:bg-slate-50/50">
+                          <td class="py-2.5 text-slate-500" x-text="fmtTime(log.created_at)"></td>
+                          <td class="py-2.5">
+                            <span x-show="log.transaction_type === 'recharge'" class="text-xs px-2 py-0.5 rounded bg-emerald-100 text-emerald-700" x-text="t('recharge')"></span>
+                            <span x-show="log.transaction_type === 'consume'" class="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-700" x-text="t('consume')"></span>
+                          </td>
+                          <td class="py-2.5 text-right font-medium" :class="Number(log.amount) > 0 ? 'text-emerald-600' : 'text-amber-600'" x-text="(Number(log.amount) > 0 ? '+' : '') + Number(log.amount).toFixed(4)"></td>
+                          <td class="py-2.5 text-right text-slate-600" x-text="Number(log.balance_after).toFixed(4)"></td>
+                          <td class="py-2.5 pl-4 text-slate-500 text-xs truncate max-w-[150px]" :title="log.transaction_type === 'consume' ? t('consume') : (log.reference_id || '-')" x-text="log.transaction_type === 'consume' ? t('consume') : (log.reference_id || '-')"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                  <template x-if="creditLogs.length === 0"><p class="text-center text-slate-400 text-sm py-8" x-text="t('no_flow')"></p></template>
                 </div>
               </div>
             </div>
@@ -469,17 +597,17 @@
           <!-- 筛选栏 -->
           <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-4 mb-4 flex flex-wrap items-center gap-3">
             <select x-model="filter.org_id" @change="page = 1; load()" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-              <option value="">全部组织</option>
+              <option value="" x-text="t('all_orgs')"></option>
               <template x-for="o in orgs" :key="o.id"><option :value="o.id" x-text="o.name"></option></template>
             </select>
             <select x-model="filter.status" @change="page = 1; load()" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-              <option value="">全部状态</option>
-              <option value="success">成功</option>
-              <option value="error">错误</option>
-              <option value="pending">处理中</option>
+              <option value="" x-text="t('all_status')"></option>
+              <option value="success" x-text="t('success')"></option>
+              <option value="error" x-text="t('error')"></option>
+              <option value="pending" x-text="t('pending')"></option>
             </select>
             <div class="flex-1"></div>
-            <span class="text-xs text-slate-400" x-show="total > 0" x-text="'共 ' + total + ' 条记录'"></span>
+            <span class="text-xs text-slate-400" x-show="total > 0" x-text="t('total_records', total)"></span>
           </div>
 
           <!-- 加载中 -->
@@ -493,7 +621,7 @@
               <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm overflow-hidden">
                 <div class="overflow-x-auto">
                   <table class="w-full text-sm">
-                    <thead><tr class="text-xs text-slate-400 border-b border-slate-100 bg-slate-50/50"><th class="text-left px-4 py-2.5 font-medium">时间</th><th class="text-left px-4 py-2.5 font-medium">服务商</th><th class="text-left px-4 py-2.5 font-medium">模型</th><th class="text-center px-4 py-2.5 font-medium">SSE</th><th class="text-left px-4 py-2.5 font-medium">状态</th><th class="text-right px-4 py-2.5 font-medium">Token</th><th class="text-right px-4 py-2.5 font-medium">耗时</th></tr></thead>
+                    <thead><tr class="text-xs text-slate-400 border-b border-slate-100 bg-slate-50/50"><th class="text-left px-4 py-2.5 font-medium" x-text="t('time')"></th><th class="text-left px-4 py-2.5 font-medium" x-text="t('provider')"></th><th class="text-left px-4 py-2.5 font-medium" x-text="t('model')"></th><th class="text-center px-4 py-2.5 font-medium">SSE</th><th class="text-left px-4 py-2.5 font-medium" x-text="t('status')"></th><th class="text-right px-4 py-2.5 font-medium">Token</th><th class="text-right px-4 py-2.5 font-medium" x-text="t('consume_credit')"></th><th class="text-right px-4 py-2.5 font-medium" x-text="t('duration')"></th></tr></thead>
                     <tbody>
                       <template x-for="log in logs" :key="log.id">
                         <tr @click="viewLog(log.id)" class="border-b border-slate-50 hover:bg-blue-50/50 cursor-pointer transition">
@@ -512,27 +640,28 @@
                                 'bg-red-400': log.status === 'error',
                                 'bg-amber-400': log.status === 'pending'
                               }" class="w-1.5 h-1.5 rounded-full"></span>
-                              <span x-text="log.status === 'success' ? '成功' : log.status === 'error' ? '错误' : '处理中'"></span>
+                              <span x-text="log.status === 'success' ? t('success') : log.status === 'error' ? t('error') : t('pending')"></span>
                             </span>
                           </td>
                         <td class="px-4 py-2.5 text-right text-xs text-slate-500">
                           <div class="font-medium text-slate-600" x-text="fmtToken(log.total_tokens)"></div>
-                          <div class="text-[10px] text-slate-400 mt-0.5">入<span x-text="fmtToken(log.prompt_tokens)"></span> · 出<span x-text="fmtToken(log.completion_tokens)"></span> · 存<span x-text="fmtToken(log.cached_tokens)"></span></div>
+                          <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(log.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(log.completion_tokens)"></span> · <span x-text="t('cache')"></span><span x-text="fmtToken(log.cached_tokens)"></span></div>
                         </td>
+                        <td class="px-4 py-2.5 text-right text-xs text-indigo-600 font-medium" x-text="log.credit_cost ? Number(log.credit_cost).toFixed(4) : '-'"></td>
                           <td class="px-4 py-2.5 text-right text-xs text-slate-500" x-text="log.duration_ms != null ? log.duration_ms + 'ms' : '-'"></td>
                         </tr>
                       </template>
                     </tbody>
                   </table>
-                  <template x-if="logs.length === 0"><p class="text-center text-slate-400 text-sm py-10">暂无日志记录</p></template>
+                  <template x-if="logs.length === 0"><p class="text-center text-slate-400 text-sm py-10" x-text="t('no_logs')"></p></template>
                 </div>
               </div>
 
               <!-- 分页 -->
               <div x-show="totalPages > 1" class="flex items-center justify-center gap-2 mt-4">
-                <button @click="page = Math.max(1, page - 1); load()" :disabled="page <= 1" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 transition">上一页</button>
+                <button @click="page = Math.max(1, page - 1); load()" :disabled="page <= 1" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 transition" x-text="t('prev_page')"></button>
                 <span class="text-sm text-slate-500" x-text="page + ' / ' + totalPages"></span>
-                <button @click="page = Math.min(totalPages, page + 1); load()" :disabled="page >= totalPages" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 transition">下一页</button>
+                <button @click="page = Math.min(totalPages, page + 1); load()" :disabled="page >= totalPages" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 transition" x-text="t('next_page')"></button>
               </div>
             </div>
           </template>
@@ -545,38 +674,39 @@
                 <div class="relative bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-4xl flex flex-col" style="max-height: calc(85vh - 2rem);">
                   <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
                     <div class="flex items-center gap-3">
-                      <h3 class="text-base font-semibold text-slate-800">日志详情</h3>
+                      <h3 class="text-base font-semibold text-slate-800" x-text="t('log_detail')"></h3>
                       <span class="text-xs font-mono text-slate-400 bg-slate-50 px-2 py-0.5 rounded" x-text="logDetail.method + ' ' + logDetail.path"></span>
                     </div>
                     <button @click="logDetail = null" class="text-slate-400 hover:text-slate-600 transition p-1 rounded-lg hover:bg-slate-100"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
                   </div>
                   <div class="overflow-y-auto p-6">
                     <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-5">
-                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400">服务商</p><p class="text-sm font-medium text-slate-700" x-text="logDetail.provider"></p></div>
-                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400">模型</p><p class="text-sm font-mono text-slate-700 truncate" x-text="logDetail.model || '-'"></p></div>
-                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400">状态</p><p class="text-sm font-medium" :class="logDetail.status === 'success' ? 'text-emerald-600' : 'text-red-500'" x-text="logDetail.status"></p></div>
-                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400">耗时</p><p class="text-sm text-slate-700" x-text="logDetail.duration_ms != null ? logDetail.duration_ms + 'ms' : '-'"></p></div>
-                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400">SSE 流式</p><p class="text-sm text-slate-700" x-text="logDetail.is_stream ? '是' : '否'"></p></div>
-                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400">HTTP 状态码</p><p class="text-sm text-slate-700" x-text="logDetail.response_status ?? '-'"></p></div>
-                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400">输入 Token</p><p class="text-sm text-blue-600 font-medium" x-text="logDetail.prompt_tokens ?? '-'"></p></div>
-                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400">输出 Token</p><p class="text-sm text-emerald-600 font-medium" x-text="logDetail.completion_tokens ?? '-'"></p></div>
-                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400">缓存 Token</p><p class="text-sm text-amber-600 font-medium" x-text="logDetail.cached_tokens ?? '-'"></p></div>
-                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400">总 Token</p><p class="text-sm text-slate-700 font-medium" x-text="logDetail.total_tokens ?? '-'"></p></div>
-                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400">时间</p><p class="text-sm text-slate-700" x-text="fmtTime(logDetail.created_at)"></p></div>
+                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('provider')"></p><p class="text-sm font-medium text-slate-700" x-text="logDetail.provider"></p></div>
+                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('model')"></p><p class="text-sm font-mono text-slate-700 truncate" x-text="logDetail.model || '-'"></p></div>
+                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('status')"></p><p class="text-sm font-medium" :class="logDetail.status === 'success' ? 'text-emerald-600' : 'text-red-500'" x-text="logDetail.status"></p></div>
+                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('duration')"></p><p class="text-sm text-slate-700" x-text="logDetail.duration_ms != null ? logDetail.duration_ms + 'ms' : '-'"></p></div>
+                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('is_stream')"></p><p class="text-sm text-slate-700" x-text="logDetail.is_stream ? t('yes') : t('no')"></p></div>
+                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('status_code')"></p><p class="text-sm text-slate-700" x-text="logDetail.response_status ?? '-'"></p></div>
+                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('prompt_token')"></p><p class="text-sm text-blue-600 font-medium" x-text="logDetail.prompt_tokens ?? '-'"></p></div>
+                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('completion_token')"></p><p class="text-sm text-emerald-600 font-medium" x-text="logDetail.completion_tokens ?? '-'"></p></div>
+                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('cached_token')"></p><p class="text-sm text-amber-600 font-medium" x-text="logDetail.cached_tokens ?? '-'"></p></div>
+                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('total_token')"></p><p class="text-sm text-slate-700 font-medium" x-text="logDetail.total_tokens ?? '-'"></p></div>
+                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('consume_credit')"></p><p class="text-sm text-indigo-600 font-medium" x-text="logDetail.credit_cost ? Number(logDetail.credit_cost).toFixed(4) : '-'"></p></div>
+                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('time')"></p><p class="text-sm text-slate-700" x-text="fmtTime(logDetail.created_at)"></p></div>
                     </div>
                     <template x-if="logDetail.error_message">
                       <div class="mb-4">
-                        <p class="text-xs text-red-500 font-medium mb-1">错误信息</p>
+                        <p class="text-xs text-red-500 font-medium mb-1" x-text="t('error_msg')"></p>
                         <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700" x-text="logDetail.error_message"></div>
                       </div>
                     </template>
                     <div class="mb-4">
-                      <p class="text-xs text-slate-500 font-medium mb-1.5">请求体</p>
-                      <pre class="bg-slate-900 text-slate-300 rounded-lg p-4 text-xs overflow-x-auto max-h-60 leading-relaxed whitespace-pre-wrap break-all" x-text="logDetail.request_body ? JSON.stringify(logDetail.request_body, null, 2) : '无'"></pre>
+                      <p class="text-xs text-slate-500 font-medium mb-1.5" x-text="t('req_body')"></p>
+                      <pre class="bg-slate-900 text-slate-300 rounded-lg p-4 text-xs overflow-x-auto max-h-60 leading-relaxed whitespace-pre-wrap break-all" x-text="logDetail.request_body ? JSON.stringify(logDetail.request_body, null, 2) : t('none')"></pre>
                     </div>
                     <div>
-                      <p class="text-xs text-slate-500 font-medium mb-1.5">响应体</p>
-                      <pre class="bg-slate-900 text-slate-300 rounded-lg p-4 text-xs overflow-x-auto max-h-60 leading-relaxed whitespace-pre-wrap break-all" x-text="logDetail.response_body ? JSON.stringify(logDetail.response_body, null, 2) : '无'"></pre>
+                      <p class="text-xs text-slate-500 font-medium mb-1.5" x-text="t('resp_body')"></p>
+                      <pre class="bg-slate-900 text-slate-300 rounded-lg p-4 text-xs overflow-x-auto max-h-60 leading-relaxed whitespace-pre-wrap break-all" x-text="logDetail.response_body ? JSON.stringify(logDetail.response_body, null, 2) : t('none')"></pre>
                     </div>
                   </div>
                 </div>
@@ -589,12 +719,12 @@
         <div x-show="tab === 'usage'" x-transition class="anim-fade-in-up" x-data="usageTab()" x-init="load()">
           <!-- 天数切换 -->
           <div class="flex items-center justify-between mb-6">
-            <h2 class="text-lg font-semibold text-slate-800">用量统计</h2>
+            <h2 class="text-lg font-semibold text-slate-800" x-text="t('usage')"></h2>
             <div class="flex bg-white border border-slate-200 rounded-lg p-0.5">
               <template x-for="d in [7, 14, 30]" :key="d">
                 <button @click="days = d; load()"
                   :class="days === d ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'"
-                  class="px-3 py-1 text-xs rounded-md font-medium transition-all" x-text="d + '天'">
+                  class="px-3 py-1 text-xs rounded-md font-medium transition-all" x-text="t('days', d)">
                 </button>
               </template>
             </div>
@@ -608,14 +738,14 @@
             <div class="space-y-6">
               <!-- 每日请求数柱状图 -->
               <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-5 anim-fade-in-up">
-                <h3 class="text-sm font-semibold text-slate-700 mb-4">每日请求数</h3>
+                <h3 class="text-sm font-semibold text-slate-700 mb-4" x-text="t('daily_req')"></h3>
                 <div class="flex items-end gap-1.5" style="height: 180px;" x-show="stats.daily_stats.length > 0">
                   <template x-for="(d, i) in stats.daily_stats" :key="d.date">
                     <div class="flex-1 flex flex-col items-center group relative">
                       <!-- Tooltip -->
                       <div class="absolute bottom-full mb-2 hidden group-hover:block z-10">
                         <div class="bg-slate-800 text-white text-xs rounded-lg px-3 py-1.5 whitespace-nowrap shadow-lg">
-                          <span x-text="d.date"></span>：<span x-text="formatNum(d.request_count)"></span> 次
+                          <span x-text="d.date"></span>: <span x-text="formatNum(d.request_count)"></span>
                         </div>
                       </div>
                       <!-- 柱子 -->
@@ -627,22 +757,22 @@
                     </div>
                   </template>
                 </div>
-                <template x-if="stats.daily_stats.length === 0"><p class="text-center text-slate-400 text-sm py-8">暂无数据</p></template>
+                <template x-if="stats.daily_stats.length === 0"><p class="text-center text-slate-400 text-sm py-8" x-text="t('no_data')"></p></template>
               </div>
 
               <!-- 每日 Token 消耗柱状图 -->
               <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-5 anim-fade-in-up anim-delay-1">
-                <h3 class="text-sm font-semibold text-slate-700 mb-4">每日 Token 消耗</h3>
+                <h3 class="text-sm font-semibold text-slate-700 mb-4" x-text="t('daily_token')"></h3>
                 <div class="flex items-end gap-1.5" style="height: 180px;" x-show="stats.daily_stats.length > 0">
                   <template x-for="(d, i) in stats.daily_stats" :key="d.date">
                     <div class="flex-1 flex flex-col items-center group relative">
                       <div class="absolute bottom-full mb-2 hidden group-hover:block z-10">
                         <div class="bg-slate-800 text-white text-xs rounded-lg px-3 py-1.5 whitespace-nowrap shadow-lg">
-                          <span x-text="d.date"></span>：<span x-text="fmtToken(d.total_tokens)"></span> Token
+                          <span x-text="d.date"></span>: <span x-text="fmtToken(d.total_tokens)"></span> Token
                           <div class="text-[10px] text-slate-300 mt-1">
-                            入 <span x-text="fmtToken(d.prompt_tokens)"></span> · 
-                            出 <span x-text="fmtToken(d.completion_tokens)"></span> · 
-                            存 <span x-text="fmtToken(d.cached_tokens)"></span>
+                            <span x-text="t('in')"></span> <span x-text="fmtToken(d.prompt_tokens)"></span> · 
+                            <span x-text="t('out')"></span> <span x-text="fmtToken(d.completion_tokens)"></span> · 
+                            <span x-text="t('cache')"></span> <span x-text="fmtToken(d.cached_tokens)"></span>
                           </div>
                         </div>
                       </div>
@@ -653,15 +783,15 @@
                     </div>
                   </template>
                 </div>
-                <template x-if="stats.daily_stats.length === 0"><p class="text-center text-slate-400 text-sm py-8">暂无数据</p></template>
+                <template x-if="stats.daily_stats.length === 0"><p class="text-center text-slate-400 text-sm py-8" x-text="t('no_data')"></p></template>
               </div>
 
               <!-- 模型使用排行 -->
               <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm anim-fade-in-up anim-delay-2">
-                <div class="px-5 py-4 border-b border-slate-100"><h3 class="text-sm font-semibold text-slate-700">模型使用排行</h3></div>
+                <div class="px-5 py-4 border-b border-slate-100"><h3 class="text-sm font-semibold text-slate-700" x-text="t('model_ranking')"></h3></div>
                 <div class="overflow-x-auto">
                   <table class="w-full text-sm">
-                    <thead><tr class="text-xs text-slate-400 border-b border-slate-100"><th class="text-left px-5 py-2.5 font-medium">排名</th><th class="text-left px-5 py-2.5 font-medium">模型</th><th class="text-right px-5 py-2.5 font-medium">请求数</th><th class="text-right px-5 py-2.5 font-medium">Token</th><th class="text-right px-5 py-2.5 font-medium">平均耗时</th></tr></thead>
+                    <thead><tr class="text-xs text-slate-400 border-b border-slate-100"><th class="text-left px-5 py-2.5 font-medium" x-text="t('ranking')"></th><th class="text-left px-5 py-2.5 font-medium" x-text="t('model')"></th><th class="text-right px-5 py-2.5 font-medium" x-text="t('req_count')"></th><th class="text-right px-5 py-2.5 font-medium">Token</th><th class="text-right px-5 py-2.5 font-medium" x-text="t('avg_time')"></th></tr></thead>
                     <tbody>
                       <template x-for="(m, i) in stats.by_model" :key="m.model">
                         <tr class="border-b border-slate-50 hover:bg-blue-50/50 transition">
@@ -675,18 +805,54 @@
                           <td class="px-5 py-2.5 text-right text-slate-600" x-text="formatNum(m.request_count)"></td>
                           <td class="px-5 py-2.5 text-right text-slate-600">
                             <div x-text="fmtToken(m.total_tokens)"></div>
-                            <div class="text-[10px] text-slate-400 mt-0.5">入<span x-text="fmtToken(m.prompt_tokens)"></span> · 出<span x-text="fmtToken(m.completion_tokens)"></span> · 存<span x-text="fmtToken(m.cached_tokens)"></span></div>
+                            <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(m.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(m.completion_tokens)"></span> · <span x-text="t('cache')"></span><span x-text="fmtToken(m.cached_tokens)"></span></div>
                           </td>
                           <td class="px-5 py-2.5 text-right text-slate-500"><span x-text="Math.round(m.avg_duration_ms)"></span>ms</td>
                         </tr>
                       </template>
                     </tbody>
                   </table>
-                  <template x-if="stats.by_model.length === 0"><p class="text-center text-slate-400 text-sm py-8">暂无数据</p></template>
+                  <template x-if="stats.by_model.length === 0"><p class="text-center text-slate-400 text-sm py-8" x-text="t('no_data')"></p></template>
                 </div>
               </div>
             </div>
           </template>
+        </div>
+        
+        <!-- ==================== 系统设置 Tab ==================== -->
+        <div x-show="tab === 'settings'" x-transition class="anim-fade-in-up" x-data="settingsTab()" x-init="load()">
+          <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-6 max-w-2xl">
+            <h3 class="text-base font-semibold text-slate-800 mb-6" x-text="t('credit_rate_setting')"></h3>
+            <p class="text-xs text-slate-500 mb-6" x-text="t('credit_rate_desc')"></p>
+            
+            <div class="space-y-4">
+              <div>
+                <label class="block text-sm text-slate-600 mb-1.5" x-text="t('input_rate')"></label>
+                <div class="flex items-center gap-2">
+                  <input x-model.number="rates.input_rate" type="number" step="0.01" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                  <span class="text-sm text-slate-400 whitespace-nowrap">Tokens / Credit</span>
+                </div>
+              </div>
+              <div>
+                <label class="block text-sm text-slate-600 mb-1.5" x-text="t('output_rate')"></label>
+                <div class="flex items-center gap-2">
+                  <input x-model.number="rates.output_rate" type="number" step="0.01" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                  <span class="text-sm text-slate-400 whitespace-nowrap">Tokens / Credit</span>
+                </div>
+              </div>
+              <div>
+                <label class="block text-sm text-slate-600 mb-1.5" x-text="t('cached_rate')"></label>
+                <div class="flex items-center gap-2">
+                  <input x-model.number="rates.cached_rate" type="number" step="0.01" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                  <span class="text-sm text-slate-400 whitespace-nowrap">Tokens / Credit</span>
+                </div>
+              </div>
+              
+              <div class="pt-4 border-t border-slate-100 flex justify-end">
+                <button @click="save()" class="px-5 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition shadow-sm" x-text="t('save_settings')"></button>
+              </div>
+            </div>
+          </div>
         </div>
 
       </main>
@@ -710,14 +876,59 @@ function fmtToken(n) {
 /** 数值格式化（带千分位） */
 function formatNum(n) {
   if (n == null) return '-';
-  return Number(n).toLocaleString('zh-CN');
+  const locale = window.lang === 'en' ? 'en-US' : 'zh-CN';
+  return Number(n).toLocaleString(locale);
 }
 
-/** 时间格式化 */
 function fmtTime(t) {
   if (!t) return '-';
-  return new Date(t).toLocaleString('zh-CN');
+  const locale = window.lang === 'en' ? 'en-US' : 'zh-CN';
+  return new Date(t).toLocaleString(locale);
 }
+
+
+window.lang = localStorage.getItem('lang') || 'zh';
+window.i18nDict = {"zh": {"login": "登 录", "logging_in": "登录中…", "username": "用户名", "password": "密码", "title": "gongs-credit", "subtitle": "API 网关管理后台", "logout": "退出", "overview": "概览", "orgs": "组织管理", "logs": "调用日志", "usage": "用量统计", "settings": "系统设置", "total_req": "总请求", "success": "成功", "error": "错误", "total_token": "总 Token", "avg_time": "平均耗时", "duration": "耗时", "by_provider": "按服务商", "by_model": "按模型", "provider": "服务商", "req_count": "请求数", "token": "Token", "model": "模型", "no_data": "暂无数据", "org_list": "组织列表", "new": "新建", "no_org": "暂无组织", "select_org": "选择左侧组织查看详情", "org_info": "组织信息", "save": "保存", "delete": "删除", "name": "名称", "slug": "标识（slug）", "status": "状态", "enable": "启用", "disable": "禁用", "credit": "剩余积分", "recharge": "充值", "flow": "流水", "create_key": "创建 Key", "prefix": "前缀", "created_at": "创建时间", "action": "操作", "no_key": "暂无 Key", "model_config": "模型配置", "add_config": "添加配置", "protocol": "协议", "model_pattern": "模型标识", "priority": "优先级", "edit": "编辑", "no_config": "暂无配置", "all_orgs": "全部组织", "all_status": "全部状态", "pending": "处理中", "total_records": "共 {0} 条记录", "time": "时间", "path": "请求路径", "status_code": "状态码", "detail": "详情", "prev_page": "上一页", "next_page": "下一页", "log_detail": "日志详情", "is_stream": "SSE 流式", "yes": "是", "no": "否", "prompt_token": "输入 Token", "completion_token": "输出 Token", "cached_token": "缓存 Token", "consume_credit": "消耗积分", "req_body": "请求体", "resp_body": "响应体", "none": "无", "daily_chart": "每日请求与 Token 趋势", "daily_token": "每日 Token 消耗", "model_ranking": "模型使用排行", "daily_req": "每日请求数", "req_trend": "请求趋势", "token_trend": "Token 趋势", "credit_rate_setting": "积分扣除比例设置", "credit_rate_desc": "设置消耗多少 Token 扣除 1 个 Credit (积分)。例如设置为 1221，则表示每消耗 1221 个 Token 扣除 1 积分。", "input_rate": "输入 Token 比例", "output_rate": "输出 Token 比例", "cached_rate": "缓存 Token 比例", "create_org": "创建组织", "cancel": "取消", "confirm_create": "确认创建", "recharge_credit": "充值积分 (Credit)", "recharge_amount": "充值额度 (支持负数扣减)", "note": "备注 (可选)", "confirm_recharge": "确认充值", "credit_flow": "积分流水", "type": "类型", "amount_change": "变动额度", "balance_after": "变动后余额", "consume": "消费", "no_flow": "暂无流水记录", "key_name": "Key 名称", "copy": "复制", "close": "关闭", "base_url": "基础 URL (Base URL)", "real_key": "真实 API Key", "confirm_save": "确认保存", "login_success": "登录成功", "logout_success": "已退出登录", "save_success": "保存成功", "copy_success": "复制成功！", "copy_fail": "复制失败，请手动选择文本复制", "org_created": "组织创建成功", "org_deleted": "组织已删除", "recharge_success": "充值成功", "key_created": "API Key 创建成功", "key_deleted": "Key 已删除", "model_updated": "模型配置已更新", "model_added": "模型配置已添加", "model_deleted": "模型配置已删除", "setting_saved": "设置已保存", "confirm_delete_org": "确定要删除该组织？此操作不可撤销。", "confirm_delete_key": "确定删除此 Key？", "confirm_delete_model": "确定删除此模型配置？", "save_settings": "保存设置", "confirm_action": "确认", "org_name_ph": "组织名称", "slug_ph": "英文标识", "key_warning": "请立即复制保存，此 Key 仅显示一次，关闭后无法再次查看。", "edit_model": "编辑模型配置", "config_name_ph": "配置名称", "model_pattern_ph": "gpt-*,o1-* 逗号分隔，支持通配符", "no_logs": "暂无日志记录", "error_msg": "错误信息", "key_name_placeholder": "例如：production-key", "recharge_placeholder": "例如: 100", "note_placeholder": "充值原因", "match_by_name": "(按名称前缀匹配)", "in": "入", "out": "出", "cache": "存", "ranking": "排名", "days": "{0} 天", "lang": "English"}, "en": {"login": "Login", "logging_in": "Logging in...", "username": "Username", "password": "Password", "title": "gongs-credit", "subtitle": "API Gateway Admin", "logout": "Logout", "overview": "Overview", "orgs": "Organizations", "logs": "Logs", "usage": "Usage Stats", "settings": "Settings", "total_req": "Total Requests", "success": "Success", "error": "Error", "total_token": "Total Tokens", "avg_time": "Avg Time", "duration": "Duration", "by_provider": "By Provider", "by_model": "By Model", "provider": "Provider", "req_count": "Requests", "token": "Tokens", "model": "Model", "no_data": "No Data", "org_list": "Org List", "new": "New", "no_org": "No Organizations", "select_org": "Select an organization on the left", "org_info": "Org Info", "save": "Save", "delete": "Delete", "name": "Name", "slug": "Slug", "status": "Status", "enable": "Enable", "disable": "Disable", "credit": "Credit", "recharge": "Recharge", "flow": "Transactions", "create_key": "Create Key", "prefix": "Prefix", "created_at": "Created At", "action": "Action", "no_key": "No Keys", "model_config": "Model Config", "add_config": "Add Config", "protocol": "Protocol", "model_pattern": "Model Pattern", "priority": "Priority", "edit": "Edit", "no_config": "No Configs", "all_orgs": "All Orgs", "all_status": "All Status", "pending": "Pending", "total_records": "Total {0} records", "time": "Time", "path": "Path", "status_code": "Status", "detail": "Detail", "prev_page": "Prev", "next_page": "Next", "log_detail": "Log Detail", "is_stream": "SSE Stream", "yes": "Yes", "no": "No", "prompt_token": "Prompt Tokens", "completion_token": "Completion Tokens", "cached_token": "Cached Tokens", "consume_credit": "Credit Cost", "req_body": "Request Body", "resp_body": "Response Body", "none": "None", "daily_chart": "Daily Request & Token Trend", "daily_token": "Daily Token Usage", "model_ranking": "Model Ranking", "daily_req": "Daily Requests", "req_trend": "Request Trend", "token_trend": "Token Trend", "credit_rate_setting": "Credit Deduction Rates", "credit_rate_desc": "Set how many tokens consume 1 Credit. E.g., 1221 means 1221 tokens cost 1 Credit.", "input_rate": "Prompt Token Rate", "output_rate": "Completion Token Rate", "cached_rate": "Cached Token Rate", "create_org": "Create Organization", "cancel": "Cancel", "confirm_create": "Create", "recharge_credit": "Recharge Credit", "recharge_amount": "Amount (negative to deduct)", "note": "Note (Optional)", "confirm_recharge": "Confirm", "credit_flow": "Credit Transactions", "type": "Type", "amount_change": "Amount", "balance_after": "Balance", "consume": "Consume", "no_flow": "No Transactions", "key_name": "Key Name", "copy": "Copy", "close": "Close", "base_url": "Base URL", "real_key": "Real API Key", "confirm_save": "Save", "login_success": "Login successful", "logout_success": "Logged out", "save_success": "Saved successfully", "copy_success": "Copied to clipboard!", "copy_fail": "Failed to copy, please copy manually", "org_created": "Organization created", "org_deleted": "Organization deleted", "recharge_success": "Recharge successful", "key_created": "API Key created", "key_deleted": "API Key deleted", "model_updated": "Model config updated", "model_added": "Model config added", "model_deleted": "Model config deleted", "setting_saved": "Settings saved", "confirm_delete_org": "Are you sure to delete this organization? This cannot be undone.", "confirm_delete_key": "Are you sure to delete this Key?", "confirm_delete_model": "Are you sure to delete this model config?", "save_settings": "Save Settings", "confirm_action": "Confirm", "org_name_ph": "Organization name", "slug_ph": "Unique identifier", "key_warning": "Please copy and save now. This key is shown only once and cannot be viewed again.", "edit_model": "Edit Model Config", "config_name_ph": "Config name", "model_pattern_ph": "gpt-*,o1-* comma separated, wildcards supported", "no_logs": "No logs", "error_msg": "Error Message", "key_name_placeholder": "e.g. production-key", "recharge_placeholder": "e.g. 100", "note_placeholder": "Recharge reason", "match_by_name": "(Match by name prefix)", "in": "In", "out": "Out", "cache": "Cache", "ranking": "Rank", "days": "{0} Days", "lang": "中文"}};
+window.t = function(key, ...args) {
+  let str = window.i18nDict[window.lang][key] || key;
+  args.forEach((arg, i) => { str = str.replace('{'+i+'}', arg); });
+  return str;
+};
+window.toggleLang = function() {
+  window.lang = window.lang === 'zh' ? 'en' : 'zh';
+  localStorage.setItem('lang', window.lang);
+  location.reload();
+};
+
+window.showToast = function(message, type = 'success') {
+  const appEl = document.querySelector('[x-data="app()"]');
+  const data = appEl && appEl._x_dataStack && appEl._x_dataStack[0];
+  if (data && data.toasts) {
+    const id = Date.now();
+    data.toasts.push({ id, message, type, show: true });
+    setTimeout(() => {
+      const toast = data.toasts.find(t => t.id === id);
+      if (toast) toast.show = false;
+      setTimeout(() => {
+        data.toasts = data.toasts.filter(t => t.id !== id);
+      }, 300);
+    }, 3000);
+  } else {
+    console.warn('[showToast fallback]', message);
+  }
+};
+
+window.showConfirm = function(message) {
+  return new Promise((resolve) => {
+    const appEl = document.querySelector('[x-data="app()"]');
+    const data = appEl && appEl._x_dataStack && appEl._x_dataStack[0];
+    if (data) {
+      data.confirmDialog = { show: true, message, resolve };
+    } else {
+      resolve(false);
+    }
+  });
+};
 
 /** 复制文本到剪贴板 */
 async function copyText(text) {
@@ -737,9 +948,9 @@ async function copyText(text) {
       document.execCommand('copy');
       textArea.remove();
     }
-    alert("复制成功！");
+    window.showToast(window.t('copy_success'));
   } catch (err) {
-    alert("复制失败，请手动选择文本复制");
+    window.showToast(window.t('copy_fail'), "error");
   }
 }
 
@@ -749,7 +960,7 @@ async function api(url, options = {}) {
   if (res.status === 204) return null;
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `请求失败 (${res.status})`);
+    throw new Error(body.error || `Request failed (${res.status})`);
   }
   return res.json();
 }
@@ -759,18 +970,24 @@ async function api(url, options = {}) {
 // ============================================================
 function app() {
   return {
+    t: window.t,
     user: null,
     tab: 'overview',
     tabs: [
-      { key: 'overview', label: '概览' },
-      { key: 'orgs', label: '组织管理' },
-      { key: 'logs', label: '调用日志' },
-      { key: 'usage', label: '用量统计' },
+      { key: 'overview', label: 'overview' },
+      { key: 'orgs', label: 'orgs' },
+      { key: 'logs', label: 'logs' },
+      { key: 'usage', label: 'usage' },
+      { key: 'settings', label: 'settings' },
     ],
+    
+    
+
     loginForm: { username: '', password: '' },
     loginLoading: false,
     loginError: '',
-
+    toasts: [],
+    confirmDialog: { show: false, message: '', resolve: null },
     async init() {
       try {
         this.user = await api('/api/auth/me');
@@ -785,15 +1002,20 @@ function app() {
       try {
         const res = await api('/api/auth/login', { method: 'POST', body: JSON.stringify(this.loginForm) });
         this.user = res.user;
+        window.showToast(t('login_success'));
       } catch (e) {
         this.loginError = e.message;
+        window.showToast(e.message, 'error');
       } finally {
         this.loginLoading = false;
       }
     },
 
     async logout() {
-      try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
+      try { 
+        await api('/api/auth/logout', { method: 'POST' }); 
+        window.showToast(t('logout_success'));
+      } catch {}
       this.user = null;
     },
   };
@@ -826,26 +1048,47 @@ function orgsTab() {
     loading: false,
     orgs: [],
     selectedOrg: null,
-    editOrg: {},
+    editOrg: { credit: 0 },
     keys: [],
     models: [],
     showCreateOrg: false,
     showCreateKey: false,
     showModelForm: false,
+    showRecharge: false,
+    showCreditLogs: false,
     createdKey: null,
     newOrg: { name: '', slug: '' },
     newKeyName: '',
+    rechargeAmount: 0,
+    rechargeNote: '',
+    creditLogs: [],
     modelForm: { id: null, name: '', protocol: 'openai', model_patterns: '', base_url: '', real_api_key: '', priority: 0 },
 
     async load() {
       this.loading = true;
-      try { this.orgs = await api('/api/orgs'); } catch { this.orgs = []; }
+      try { 
+        this.orgs = await api('/api/orgs'); 
+        if (this.orgs.length > 0) {
+          if (!this.selectedOrg) {
+            await this.selectOrg(this.orgs[0]);
+          } else {
+            const updatedOrg = this.orgs.find(o => o.id === this.selectedOrg.id);
+            if (updatedOrg) {
+              await this.selectOrg(updatedOrg);
+            } else {
+              await this.selectOrg(this.orgs[0]);
+            }
+          }
+        } else {
+          this.selectedOrg = null;
+        }
+      } catch { this.orgs = []; }
       this.loading = false;
     },
 
     async selectOrg(org) {
       this.selectedOrg = org;
-      this.editOrg = { name: org.name, slug: org.slug, is_active: org.is_active };
+      this.editOrg = { name: org.name, slug: org.slug, is_active: org.is_active ? 'true' : 'false', credit: org.credit || 0 };
       await Promise.all([this.loadKeys(), this.loadModels()]);
     },
 
@@ -862,25 +1105,55 @@ function orgsTab() {
         await api('/api/orgs', { method: 'POST', body: JSON.stringify(this.newOrg) });
         this.newOrg = { name: '', slug: '' };
         this.showCreateOrg = false;
+        window.showToast(t('org_created'));
         await this.load();
-      } catch (e) { alert(e.message); }
+      } catch (e) { window.showToast(e.message, 'error'); }
     },
 
     async saveOrg() {
       try {
-        const updated = await api(`/api/orgs/${this.selectedOrg.id}`, { method: 'PUT', body: JSON.stringify(this.editOrg) });
+        const updated = await api(`/api/orgs/${this.selectedOrg.id}`, { method: 'PUT', body: JSON.stringify({
+          name: this.editOrg.name,
+          slug: this.editOrg.slug,
+          is_active: this.editOrg.is_active === 'true' || this.editOrg.is_active === true
+        }) });
         Object.assign(this.selectedOrg, updated);
+        this.editOrg.is_active = updated.is_active; // 确保保存后状态同步
+        window.showToast(t('save_success'));
         await this.load();
-      } catch (e) { alert(e.message); }
+      } catch (e) { window.showToast(e.message, 'error'); }
     },
 
     async deleteOrg() {
-      if (!confirm('确定要删除该组织？此操作不可撤销。')) return;
+      if (!await window.showConfirm(t('confirm_delete_org'))) return;
       try {
         await api(`/api/orgs/${this.selectedOrg.id}`, { method: 'DELETE' });
         this.selectedOrg = null;
+        window.showToast(t('org_deleted'));
         await this.load();
-      } catch (e) { alert(e.message); }
+      } catch (e) { window.showToast(e.message, 'error'); }
+    },
+
+    async rechargeCredit() {
+      try {
+        const updated = await api(`/api/orgs/${this.selectedOrg.id}/credit`, {
+          method: 'POST',
+          body: JSON.stringify({ amount: Number(this.rechargeAmount), note: this.rechargeNote })
+        });
+        Object.assign(this.selectedOrg, updated);
+        this.editOrg.credit = updated.credit;
+        this.showRecharge = false;
+        this.rechargeAmount = 0;
+        this.rechargeNote = '';
+        window.showToast(t('recharge_success'));
+      } catch (e) { window.showToast(e.message, 'error'); }
+    },
+
+    async loadCreditLogs() {
+      try {
+        this.creditLogs = await api(`/api/orgs/${this.selectedOrg.id}/credit_logs`);
+        this.showCreditLogs = true;
+      } catch (e) { window.showToast(e.message, 'error'); }
     },
 
     async createKey() {
@@ -889,16 +1162,18 @@ function orgsTab() {
         this.createdKey = res;
         this.newKeyName = '';
         this.showCreateKey = false;
+        window.showToast(t('key_created'));
         await this.loadKeys();
-      } catch (e) { alert(e.message); }
+      } catch (e) { window.showToast(e.message, 'error'); }
     },
 
     async deleteKey(id) {
-      if (!confirm('确定删除此 Key？')) return;
+      if (!await window.showConfirm(t('confirm_delete_key'))) return;
       try {
         await api(`/api/keys/${id}`, { method: 'DELETE' });
+        window.showToast(t('key_deleted'));
         await this.loadKeys();
-      } catch (e) { alert(e.message); }
+      } catch (e) { window.showToast(e.message, 'error'); }
     },
 
     openModelForm(model = null) {
@@ -914,20 +1189,23 @@ function orgsTab() {
       try {
         if (this.modelForm.id) {
           await api(`/api/models/${this.modelForm.id}`, { method: 'PUT', body: JSON.stringify(this.modelForm) });
+          window.showToast(t('model_updated'));
         } else {
           await api(`/api/orgs/${this.selectedOrg.id}/models`, { method: 'POST', body: JSON.stringify(this.modelForm) });
+          window.showToast(t('model_added'));
         }
         this.showModelForm = false;
         await this.loadModels();
-      } catch (e) { alert(e.message); }
+      } catch (e) { window.showToast(e.message, 'error'); }
     },
 
     async deleteModel(id) {
-      if (!confirm('确定删除此模型配置？')) return;
+      if (!await window.showConfirm(t('confirm_delete_model'))) return;
       try {
         await api(`/api/models/${id}`, { method: 'DELETE' });
+        window.showToast(t('model_deleted'));
         await this.loadModels();
-      } catch (e) { alert(e.message); }
+      } catch (e) { window.showToast(e.message, 'error'); }
     },
   };
 }
@@ -968,7 +1246,7 @@ function logsTab() {
     async viewLog(id) {
       try {
         this.logDetail = await api(`/api/logs/${id}`);
-      } catch (e) { alert(e.message); }
+      } catch (e) { window.showToast(e.message, 'error'); }
     },
   };
 }
@@ -999,6 +1277,29 @@ function usageTab() {
       } catch { this.stats = null; }
       this.loading = false;
     },
+  };
+}
+function settingsTab() {
+  return {
+    rates: {
+      input_rate: 1221,
+      output_rate: 203.5,
+      cached_rate: 12210
+    },
+    async load() {
+      try {
+        this.rates = await api('/api/settings/credit_rates');
+      } catch (e) { window.showToast(e.message, 'error'); }
+    },
+    async save() {
+      try {
+        await api('/api/settings/credit_rates', {
+          method: 'PUT',
+          body: JSON.stringify(this.rates)
+        });
+        window.showToast(t('save_success'));
+      } catch (e) { window.showToast(e.message, 'error'); }
+    }
   };
 }
 </script>

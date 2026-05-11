@@ -30,6 +30,7 @@ const HOP_BY_HOP_HEADERS: &[&str] = &[
     "upgrade",
     "proxy-authorization",
     "proxy-authenticate",
+    "accept-encoding", // 移除客户端的压缩请求，确保我们能读取到明文 JSON
 ];
 
 /// 根据请求路径和 headers 检测 AI 协议类型
@@ -167,19 +168,23 @@ pub fn extract_token_usage(protocol: Protocol, body: &Value) -> TokenUsage {
             }
         }
         Protocol::Gemini => {
-            let meta = &body["usageMetadata"];
-            let prompt = meta["promptTokenCount"].as_i64().map(|v| v as i32);
-            let candidates = meta["candidatesTokenCount"].as_i64().map(|v| v as i32);
-            TokenUsage {
-                prompt_tokens: prompt,
-                completion_tokens: candidates,
-                cached_tokens: meta["cachedContentTokenCount"]
-                    .as_i64()
-                    .map(|v| v as i32),
-                total_tokens: match (prompt, candidates) {
-                    (Some(p), Some(c)) => Some(p + c),
-                    _ => None,
-                },
+            let meta = body.get("usageMetadata");
+            if let Some(meta) = meta {
+                let prompt = meta.get("promptTokenCount").and_then(|v| v.as_i64()).map(|v| v as i32);
+                let candidates = meta.get("candidatesTokenCount").and_then(|v| v.as_i64()).map(|v| v as i32);
+                let cached = meta.get("cachedContentTokenCount").and_then(|v| v.as_i64()).map(|v| v as i32);
+                let total = meta.get("totalTokenCount").and_then(|v| v.as_i64()).map(|v| v as i32);
+                TokenUsage {
+                    prompt_tokens: prompt,
+                    completion_tokens: candidates,
+                    cached_tokens: cached,
+                    total_tokens: total.or_else(|| match (prompt, candidates) {
+                        (Some(p), Some(c)) => Some(p + c),
+                        _ => None,
+                    }),
+                }
+            } else {
+                TokenUsage::default()
             }
         }
     }

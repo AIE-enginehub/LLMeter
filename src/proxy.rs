@@ -6,6 +6,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::stream::{self, StreamExt};
+use rust_decimal::prelude::FromPrimitive;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -67,6 +68,14 @@ pub async fn proxy_handler(
         .ok_or((StatusCode::UNAUTHORIZED, "Invalid or disabled API Key".to_string()))?;
 
     let (api_key_record, org) = key_info;
+
+    // 检查积分是否充足
+    if org.credit <= rust_decimal::Decimal::ZERO {
+        return Err((
+            StatusCode::PAYMENT_REQUIRED,
+            "Insufficient quota (额度不足)".to_string(),
+        ));
+    }
 
     // 异步更新 API Key 最后使用时间
     let pool_bg = state.pool.clone();
@@ -156,8 +165,7 @@ pub async fn proxy_handler(
 
     let resp_status = upstream_resp.status();
 
-    // 10. 异步创建请求日志
-    let log_pool = state.pool.clone();
+    // 10. 准备创建请求日志的数据
     let log_org_id = org.id;
     let log_key_id = api_key_record.id;
     let log_provider = model_config.name.clone();
@@ -167,29 +175,28 @@ pub async fn proxy_handler(
     let log_body = body_json.clone();
     let log_id = Uuid::new_v4();
 
-    tokio::spawn(async move {
-        let _ = sqlx::query(
-            "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, request_body, status) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')"
-        )
-        .bind(log_id)
-        .bind(log_org_id)
-        .bind(log_key_id)
-        .bind(&log_provider)
-        .bind(log_model.as_deref())
-        .bind(&log_path)
-        .bind(&log_method)
-        .bind(is_stream)
-        .bind(log_body.as_ref())
-        .execute(&log_pool)
-        .await;
-    });
+    // 10. 创建请求日志 (等待执行完成以避免与后续的 UPDATE 产生竞态条件)
+    let _ = sqlx::query(
+        "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, request_body, status) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')"
+    )
+    .bind(log_id)
+    .bind(log_org_id)
+    .bind(log_key_id)
+    .bind(&log_provider)
+    .bind(log_model.as_deref())
+    .bind(&log_path)
+    .bind(&log_method)
+    .bind(is_stream)
+    .bind(log_body.as_ref())
+    .execute(&state.pool)
+    .await;
 
     // 11. 处理响应
     if is_stream {
-        handle_streaming_response(state.pool.clone(), log_id, actual_protocol, upstream_resp, resp_status, start).await
+        handle_streaming_response(state.pool.clone(), log_id, log_org_id, actual_protocol, upstream_resp, resp_status, start).await
     } else {
-        handle_normal_response(state.pool.clone(), log_id, actual_protocol, upstream_resp, resp_status, start).await
+        handle_normal_response(state.pool.clone(), log_id, log_org_id, actual_protocol, upstream_resp, resp_status, start).await
     }
 }
 
@@ -218,6 +225,7 @@ fn strip_protocol_prefix(path: &str, protocol: Protocol) -> String {
 async fn handle_normal_response(
     pool: sqlx::PgPool,
     log_id: Uuid,
+    org_id: Uuid,
     protocol: Protocol,
     upstream_resp: reqwest::Response,
     status: reqwest::StatusCode,
@@ -228,9 +236,13 @@ async fn handle_normal_response(
         (StatusCode::BAD_GATEWAY, format!("Failed to read upstream response: {e}"))
     })?;
 
-    let resp_json: Option<Value> = serde_json::from_slice(&resp_bytes).ok().or_else(|| {
-        String::from_utf8(resp_bytes.to_vec()).ok().map(Value::String)
-    });
+    let resp_json: Option<Value> = match serde_json::from_slice(&resp_bytes) {
+        Ok(json) => Some(json),
+        Err(e) => {
+            tracing::warn!("Failed to parse upstream response as JSON: {}. Raw body: {}", e, String::from_utf8_lossy(&resp_bytes));
+            None
+        }
+    };
     
     let usage = resp_json
         .as_ref()
@@ -248,7 +260,9 @@ async fn handle_normal_response(
             None
         };
 
-        let _ = sqlx::query(
+        tracing::info!("Executing UPDATE for log_id: {}, status: {}", log_id, status_str);
+
+        let update_res = sqlx::query(
             "UPDATE request_logs SET response_status=$2, status=$3, prompt_tokens=$4, \
              completion_tokens=$5, cached_tokens=$6, total_tokens=$7, duration_ms=$8, \
              error_message=$9, response_body=$10, updated_at=now() WHERE id=$1"
@@ -261,10 +275,46 @@ async fn handle_normal_response(
         .bind(usage.cached_tokens)
         .bind(usage.total_tokens)
         .bind(duration_ms)
-        .bind(error_msg.as_deref())
-        .bind(resp_json.as_ref())
+        .bind(error_msg.clone())
+        .bind(resp_json.clone())
         .execute(&pool)
         .await;
+
+        match &update_res {
+            Ok(res) => tracing::info!("UPDATE success, rows affected: {}", res.rows_affected()),
+            Err(e) => tracing::error!("Failed to update request_log: {}", e),
+        }
+
+        // 扣除积分
+        if status_str == "success" {
+            let rates = crate::db::get_credit_rates(&pool).await;
+            let mut cost = 0.0;
+            if let Some(p) = usage.prompt_tokens {
+                if rates.input_rate > 0.0 {
+                    cost += (p as f64) / rates.input_rate;
+                }
+            }
+            if let Some(c) = usage.completion_tokens {
+                if rates.output_rate > 0.0 {
+                    cost += (c as f64) / rates.output_rate;
+                }
+            }
+            if let Some(ca) = usage.cached_tokens {
+                if rates.cached_rate > 0.0 {
+                    cost += (ca as f64) / rates.cached_rate;
+                }
+            }
+            if cost > 0.0 {
+                if let Some(decimal_cost) = rust_decimal::Decimal::from_f64(cost) {
+                    let _ = crate::db::deduct_credit(&pool, org_id, decimal_cost, &log_id.to_string()).await;
+                    let _ = sqlx::query("UPDATE request_logs SET credit_cost = $1 WHERE id = $2")
+                        .bind(decimal_cost)
+                        .bind(log_id)
+                        .execute(&pool)
+                        .await;
+                }
+            }
+        }
     });
 
     let mut builder = Response::builder().status(status_code);
@@ -284,6 +334,7 @@ async fn handle_normal_response(
 async fn handle_streaming_response(
     pool: sqlx::PgPool,
     log_id: Uuid,
+    org_id: Uuid,
     proto: Protocol,
     upstream_resp: reqwest::Response,
     status: reqwest::StatusCode,
@@ -329,7 +380,7 @@ async fn handle_streaming_response(
             let status_str = if (200..300).contains(&status_code) { "success" } else { "error" };
             let resp_json = Value::String(body_str);
             
-            let _ = sqlx::query(
+            let update_res = sqlx::query(
                 "UPDATE request_logs SET response_status=$2, status=$3, prompt_tokens=$4, \
                  completion_tokens=$5, cached_tokens=$6, total_tokens=$7, duration_ms=$8, \
                  response_body=$9, updated_at=now() WHERE id=$1"
@@ -342,9 +393,45 @@ async fn handle_streaming_response(
             .bind(usage.cached_tokens)
             .bind(usage.total_tokens)
             .bind(duration_ms)
-            .bind(resp_json)
+            .bind(resp_json.clone())
             .execute(&pool_clone)
             .await;
+
+            match &update_res {
+                Ok(res) => tracing::info!("Streaming UPDATE success, rows affected: {}", res.rows_affected()),
+                Err(e) => tracing::error!("Failed to update request_log (stream): {}", e),
+            }
+
+            // 扣除积分
+            if status_str == "success" {
+                let rates = crate::db::get_credit_rates(&pool_clone).await;
+                let mut cost = 0.0;
+                if let Some(p) = usage.prompt_tokens {
+                    if rates.input_rate > 0.0 {
+                        cost += (p as f64) / rates.input_rate;
+                    }
+                }
+                if let Some(c) = usage.completion_tokens {
+                    if rates.output_rate > 0.0 {
+                        cost += (c as f64) / rates.output_rate;
+                    }
+                }
+                if let Some(ca) = usage.cached_tokens {
+                    if rates.cached_rate > 0.0 {
+                        cost += (ca as f64) / rates.cached_rate;
+                    }
+                }
+                if cost > 0.0 {
+                    if let Some(decimal_cost) = rust_decimal::Decimal::from_f64(cost) {
+                        let _ = crate::db::deduct_credit(&pool_clone, org_id, decimal_cost, &log_id.to_string()).await;
+                        let _ = sqlx::query("UPDATE request_logs SET credit_cost = $1 WHERE id = $2")
+                            .bind(decimal_cost)
+                            .bind(log_id)
+                            .execute(&pool_clone)
+                            .await;
+                    }
+                }
+            }
         }
     });
 
