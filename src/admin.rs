@@ -863,7 +863,7 @@ struct StatsQuery {
 #[derive(Serialize)]
 struct StatsResponse {
     overview: StatsOverview,
-    by_provider: Vec<ProviderStats>,
+    by_org: Vec<OrgStats>,
     by_model: Vec<ModelStats>,
     daily_stats: Vec<DailyStats>,
 }
@@ -882,13 +882,15 @@ struct StatsOverview {
 }
 
 #[derive(Serialize, sqlx::FromRow)]
-struct ProviderStats {
-    provider: String,
+struct OrgStats {
+    org_id: Uuid,
+    org_name: String,
     request_count: i64,
     prompt_tokens: i64,
     completion_tokens: i64,
     cached_tokens: i64,
     total_tokens: i64,
+    total_credit_cost: f64,
     error_count: i64,
 }
 
@@ -954,23 +956,26 @@ async fn get_stats(
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // 按 provider
-    let provider_sql = format!(
-        "SELECT provider, \
+    // 按组织
+    let org_sql = format!(
+        "SELECT r.org_id, COALESCE(o.name, 'unknown') AS org_name, \
             COUNT(*)::BIGINT AS request_count, \
-            COALESCE(SUM(prompt_tokens), 0)::BIGINT AS prompt_tokens, \
-            COALESCE(SUM(completion_tokens), 0)::BIGINT AS completion_tokens, \
-            COALESCE(SUM(cached_tokens), 0)::BIGINT AS cached_tokens, \
-            (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) + COALESCE(SUM(cached_tokens), 0))::BIGINT AS total_tokens, \
-            COUNT(*) FILTER (WHERE status = 'error')::BIGINT AS error_count \
-         FROM request_logs WHERE created_at >= $1 {org_filter} \
-         GROUP BY provider ORDER BY request_count DESC"
+            COALESCE(SUM(r.prompt_tokens), 0)::BIGINT AS prompt_tokens, \
+            COALESCE(SUM(r.completion_tokens), 0)::BIGINT AS completion_tokens, \
+            COALESCE(SUM(r.cached_tokens), 0)::BIGINT AS cached_tokens, \
+            (COALESCE(SUM(r.prompt_tokens), 0) + COALESCE(SUM(r.completion_tokens), 0) + COALESCE(SUM(r.cached_tokens), 0))::BIGINT AS total_tokens, \
+            COALESCE(SUM(r.credit_cost)::FLOAT8, 0) AS total_credit_cost, \
+            COUNT(*) FILTER (WHERE r.status = 'error')::BIGINT AS error_count \
+         FROM request_logs r LEFT JOIN organizations o ON r.org_id = o.id \
+         WHERE r.created_at >= $1 {} \
+         GROUP BY r.org_id, o.name ORDER BY request_count DESC",
+        if q.org_id.is_some() { "AND r.org_id = $2" } else { "" }
     );
-    let mut pq = sqlx::query_as::<_, ProviderStats>(&provider_sql).bind(since);
+    let mut oq = sqlx::query_as::<_, OrgStats>(&org_sql).bind(since);
     if let Some(ref oid) = q.org_id {
-        pq = pq.bind(oid);
+        oq = oq.bind(oid);
     }
-    let by_provider = pq
+    let by_org = oq
         .fetch_all(&state.pool)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1021,7 +1026,7 @@ async fn get_stats(
 
     Ok(Json(StatsResponse {
         overview,
-        by_provider,
+        by_org,
         by_model,
         daily_stats,
     }))

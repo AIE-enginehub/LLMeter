@@ -232,28 +232,29 @@
                 </div>
               </div>
 
-              <!-- 按服务商 / 模型统计 -->
+              <!-- 按组织 / 模型统计 -->
               <div class="grid lg:grid-cols-2 gap-6">
                 <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm anim-fade-in-up anim-delay-3">
-                  <div class="px-5 py-4 border-b border-slate-100"><h3 class="text-sm font-semibold text-slate-700" x-text="t('by_provider')"></h3></div>
+                  <div class="px-5 py-4 border-b border-slate-100"><h3 class="text-sm font-semibold text-slate-700" x-text="t('by_org')"></h3></div>
                   <div class="overflow-x-auto">
                     <table class="w-full text-sm">
-                      <thead><tr class="text-xs text-slate-400 border-b border-slate-100"><th class="text-left px-5 py-2.5 font-medium" x-text="t('provider')"></th><th class="text-right px-5 py-2.5 font-medium" x-text="t('req_count')"></th><th class="text-right px-5 py-2.5 font-medium">Token</th><th class="text-right px-5 py-2.5 font-medium" x-text="t('error')"></th></tr></thead>
+                      <thead><tr class="text-xs text-slate-400 border-b border-slate-100"><th class="text-left px-5 py-2.5 font-medium" x-text="t('orgs')"></th><th class="text-right px-5 py-2.5 font-medium" x-text="t('req_count')"></th><th class="text-right px-5 py-2.5 font-medium">Token</th><th class="text-right px-5 py-2.5 font-medium" x-text="t('credit_cost')"></th><th class="text-right px-5 py-2.5 font-medium" x-text="t('error')"></th></tr></thead>
                       <tbody>
-                        <template x-for="p in stats.by_provider" :key="p.provider">
+                        <template x-for="og in stats.by_org" :key="og.org_id">
                           <tr class="border-b border-slate-50 hover:bg-blue-50/50 transition">
-                            <td class="px-5 py-2.5 font-medium text-slate-700" x-text="p.provider"></td>
-                            <td class="px-5 py-2.5 text-right text-slate-600" x-text="formatNum(p.request_count)"></td>
+                            <td class="px-5 py-2.5 font-medium text-slate-700" x-text="og.org_name"></td>
+                            <td class="px-5 py-2.5 text-right text-slate-600" x-text="formatNum(og.request_count)"></td>
                             <td class="px-5 py-2.5 text-right text-slate-600">
-                            <div x-text="fmtToken(p.total_tokens)"></div>
-                            <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(p.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(p.completion_tokens)"></span> · <span x-text="t('cache')"></span><span x-text="fmtToken(p.cached_tokens)"></span></div>
-                          </td>
-                            <td class="px-5 py-2.5 text-right"><span :class="p.error_count > 0 ? 'text-red-500' : 'text-slate-400'" x-text="p.error_count"></span></td>
+                              <div x-text="fmtToken(og.total_tokens)"></div>
+                              <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(og.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(og.completion_tokens)"></span> · <span x-text="t('cache')"></span><span x-text="fmtToken(og.cached_tokens)"></span></div>
+                            </td>
+                            <td class="px-5 py-2.5 text-right text-indigo-600 font-medium" x-text="Number(og.total_credit_cost || 0).toFixed(4)"></td>
+                            <td class="px-5 py-2.5 text-right"><span :class="og.error_count > 0 ? 'text-red-500' : 'text-slate-400'" x-text="og.error_count"></span></td>
                           </tr>
                         </template>
                       </tbody>
                     </table>
-                    <template x-if="stats.by_provider.length === 0"><p class="text-center text-slate-400 text-sm py-8" x-text="t('no_data')"></p></template>
+                    <template x-if="stats.by_org.length === 0"><p class="text-center text-slate-400 text-sm py-8" x-text="t('no_data')"></p></template>
                   </div>
                 </div>
 
