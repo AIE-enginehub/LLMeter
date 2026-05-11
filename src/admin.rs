@@ -647,7 +647,7 @@ async fn list_logs(
         param_idx += 1;
     }
     if q.model.is_some() {
-        conditions.push(format!("model = ${param_idx}"));
+        conditions.push(format!("model ILIKE ${param_idx}"));
         param_idx += 1;
     }
     if q.status.is_some() {
@@ -671,7 +671,7 @@ async fn list_logs(
         count_query = count_query.bind(v);
     }
     if let Some(ref v) = q.model {
-        count_query = count_query.bind(v);
+        count_query = count_query.bind(format!("%{v}%"));
     }
     if let Some(ref v) = q.status {
         count_query = count_query.bind(v);
@@ -702,7 +702,7 @@ async fn list_logs(
         data_query = data_query.bind(v);
     }
     if let Some(ref v) = q.model {
-        data_query = data_query.bind(v);
+        data_query = data_query.bind(format!("%{v}%"));
     }
     if let Some(ref v) = q.status {
         data_query = data_query.bind(v);
@@ -878,6 +878,7 @@ struct StatsOverview {
     cached_tokens: i64,
     total_tokens: i64,
     avg_duration_ms: f64,
+    total_credit_cost: f64,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -900,6 +901,7 @@ struct ModelStats {
     cached_tokens: i64,
     total_tokens: i64,
     avg_duration_ms: f64,
+    total_credit_cost: f64,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -911,6 +913,7 @@ struct DailyStats {
     cached_tokens: i64,
     total_tokens: i64,
     error_count: i64,
+    credit_cost: f64,
 }
 
 /// GET /api/stats — 统计数据
@@ -938,7 +941,8 @@ async fn get_stats(
             COALESCE(SUM(completion_tokens), 0)::BIGINT AS completion_tokens, \
             COALESCE(SUM(cached_tokens), 0)::BIGINT AS cached_tokens, \
             (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) + COALESCE(SUM(cached_tokens), 0))::BIGINT AS total_tokens, \
-            COALESCE(AVG(duration_ms)::FLOAT8, 0) AS avg_duration_ms \
+            COALESCE(AVG(duration_ms)::FLOAT8, 0) AS avg_duration_ms, \
+            COALESCE(SUM(credit_cost)::FLOAT8, 0) AS total_credit_cost \
          FROM request_logs WHERE created_at >= $1 {org_filter}"
     );
     let mut overview_query = sqlx::query_as::<_, StatsOverview>(&overview_sql).bind(since);
@@ -979,7 +983,8 @@ async fn get_stats(
             COALESCE(SUM(completion_tokens), 0)::BIGINT AS completion_tokens, \
             COALESCE(SUM(cached_tokens), 0)::BIGINT AS cached_tokens, \
             (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) + COALESCE(SUM(cached_tokens), 0))::BIGINT AS total_tokens, \
-            COALESCE(AVG(duration_ms)::FLOAT8, 0) AS avg_duration_ms \
+            COALESCE(AVG(duration_ms)::FLOAT8, 0) AS avg_duration_ms, \
+            COALESCE(SUM(credit_cost)::FLOAT8, 0) AS total_credit_cost \
          FROM request_logs WHERE created_at >= $1 {org_filter} \
          GROUP BY model ORDER BY request_count DESC"
     );
@@ -1000,7 +1005,8 @@ async fn get_stats(
             COALESCE(SUM(completion_tokens), 0)::BIGINT AS completion_tokens, \
             COALESCE(SUM(cached_tokens), 0)::BIGINT AS cached_tokens, \
             (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) + COALESCE(SUM(cached_tokens), 0))::BIGINT AS total_tokens, \
-            COUNT(*) FILTER (WHERE status = 'error')::BIGINT AS error_count \
+            COUNT(*) FILTER (WHERE status = 'error')::BIGINT AS error_count, \
+            COALESCE(SUM(credit_cost)::FLOAT8, 0) AS credit_cost \
          FROM request_logs WHERE created_at >= $1 {org_filter} \
          GROUP BY date ORDER BY date"
     );
