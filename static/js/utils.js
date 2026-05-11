@@ -86,6 +86,25 @@ async function copyText(text) {
   }
 }
 
+/** 错误消息国际化映射 */
+const ERROR_MAP = {
+  '该标识 (slug) 已被其他组织使用': { en: 'This slug is already in use by another organization' },
+  '该组织名称已存在': { en: 'Organization name already exists' },
+  'API Key 冲突，请重试': { en: 'API Key conflict, please retry' },
+  '模型配置名称已存在': { en: 'Model config name already exists' },
+  '数据重复，请检查输入': { en: 'Duplicate data, please check your input' },
+  '该记录被其他数据引用，无法操作': { en: 'This record is referenced by other data and cannot be modified' },
+  '必填字段不能为空': { en: 'Required fields cannot be empty' },
+  '操作失败，请稍后重试': { en: 'Operation failed, please try again later' },
+  '新密码长度不能少于 6 位': { en: 'Password must be at least 6 characters' },
+  '原密码错误': { en: 'Current password is incorrect' },
+};
+
+function friendlyError(msg) {
+  if (window.lang === 'en' && ERROR_MAP[msg]) return ERROR_MAP[msg].en;
+  return msg;
+}
+
 /** 封装 fetch 请求，自动处理 JSON 和错误 */
 async function api(url, options = {}) {
   const res = await fetch(url, {
@@ -96,7 +115,7 @@ async function api(url, options = {}) {
   if (res.status === 204) return null;
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `Request failed (${res.status})`);
+    throw new Error(friendlyError(body.error || `Request failed (${res.status})`));
   }
   return res.json();
 }

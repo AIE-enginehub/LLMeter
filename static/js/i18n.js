@@ -80,6 +80,9 @@ window.i18nDict = {
     "all_usage": "全部用量", "org_usage": "按组织", "perspective_token": "Token 视角",
     "perspective_credit": "Credit 视角", "total_credit_cost": "总消耗积分",
     "daily_credit": "每日 Credit 消耗", "credit_cost": "Credit",
+    "change_pwd": "修改密码", "old_pwd": "原密码", "new_pwd": "新密码",
+    "confirm_pwd": "确认新密码", "pwd_mismatch": "两次输入的新密码不一致",
+    "pwd_changed": "密码修改成功", "pwd_too_short": "新密码长度不能少于 6 位",
     "lang": "English"
   },
   "en": {
@@ -160,6 +163,9 @@ window.i18nDict = {
     "all_usage": "All Usage", "org_usage": "By Org", "perspective_token": "Token View",
     "perspective_credit": "Credit View", "total_credit_cost": "Total Credit Cost",
     "daily_credit": "Daily Credit Cost", "credit_cost": "Credit",
+    "change_pwd": "Change Password", "old_pwd": "Current Password", "new_pwd": "New Password",
+    "confirm_pwd": "Confirm Password", "pwd_mismatch": "New passwords do not match",
+    "pwd_changed": "Password changed successfully", "pwd_too_short": "Password must be at least 6 characters",
     "lang": "中文"
   }
 };

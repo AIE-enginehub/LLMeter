@@ -34,6 +34,33 @@ fn err(status: StatusCode, msg: impl Into<String>) -> (StatusCode, Json<ErrorRes
     )
 }
 
+/// 将数据库错误转为用户友好的提示
+fn friendly_db_err(e: sqlx::Error) -> (StatusCode, Json<ErrorResponse>) {
+    let msg = e.to_string();
+    if msg.contains("unique constraint") {
+        if msg.contains("organizations_slug_key") {
+            return err(StatusCode::CONFLICT, "该标识 (slug) 已被其他组织使用");
+        }
+        if msg.contains("organizations_name_key") {
+            return err(StatusCode::CONFLICT, "该组织名称已存在");
+        }
+        if msg.contains("api_keys") {
+            return err(StatusCode::CONFLICT, "API Key 冲突，请重试");
+        }
+        if msg.contains("model_configs") {
+            return err(StatusCode::CONFLICT, "模型配置名称已存在");
+        }
+        return err(StatusCode::CONFLICT, "数据重复，请检查输入");
+    }
+    if msg.contains("foreign key constraint") {
+        return err(StatusCode::CONFLICT, "该记录被其他数据引用，无法操作");
+    }
+    if msg.contains("not-null constraint") {
+        return err(StatusCode::BAD_REQUEST, "必填字段不能为空");
+    }
+    err(StatusCode::INTERNAL_SERVER_ERROR, "操作失败，请稍后重试")
+}
+
 // ============================================================
 // 路由注册
 // ============================================================
@@ -45,6 +72,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/auth/login", post(login))
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/me", get(me))
+        .route("/api/auth/password", put(change_password))
         // 组织管理
         .route("/api/orgs", get(list_orgs).post(create_org))
         .route(
@@ -271,6 +299,50 @@ async fn me(
     }))
 }
 
+#[derive(Deserialize)]
+struct ChangePasswordRequest {
+    old_password: String,
+    new_password: String,
+}
+
+/// PUT /api/auth/password — 修改当前管理员密码
+async fn change_password(
+    State(state): State<Arc<AppState>>,
+    admin: AuthAdmin,
+    Json(body): Json<ChangePasswordRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    if body.new_password.len() < 6 {
+        return Err(err(StatusCode::BAD_REQUEST, "新密码长度不能少于 6 位"));
+    }
+
+    let user_id: Uuid = admin
+        .user_id
+        .parse()
+        .map_err(|_| err(StatusCode::UNAUTHORIZED, "Invalid user id in token"))?;
+
+    let user = sqlx::query_as::<_, AdminUserRow>(
+        "SELECT id, username, password_hash, created_at FROM admin_users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if !auth::verify_password(&body.old_password, &user.password_hash) {
+        return Err(err(StatusCode::BAD_REQUEST, "原密码错误"));
+    }
+
+    let new_hash = auth::hash_password(&body.new_password);
+    sqlx::query("UPDATE admin_users SET password_hash = $1 WHERE id = $2")
+        .bind(&new_hash)
+        .bind(user_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(serde_json::json!({"ok": true})))
+}
+
 // ============================================================
 // 组织管理 API
 // ============================================================
@@ -317,7 +389,7 @@ async fn create_org(
     .bind(&body.slug)
     .fetch_one(&state.pool)
     .await
-    .map_err(|e| err(StatusCode::BAD_REQUEST, e.to_string()))?;
+    .map_err(friendly_db_err)?;
 
     Ok((StatusCode::CREATED, Json(row)))
 }
@@ -344,7 +416,7 @@ async fn update_org(
     .bind(body.is_active)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(friendly_db_err)?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Organization not found"))?;
 
     Ok(Json(row))
@@ -360,7 +432,7 @@ async fn delete_org(
         .bind(id)
         .execute(&state.pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(friendly_db_err)?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Organization not found"));
@@ -407,20 +479,24 @@ async fn list_keys(
 }
 
 /// POST /api/orgs/:org_id/keys — 创建 API Key
-/// Key 格式: gc-{uuid去掉横线的前32字符}，存储 sha256 hash，key_prefix 保存前 10 字符
+/// Key 格式: gc-{slug}-{24 hex}，前缀包含组织 slug 便于识别归属
 async fn create_key(
     State(state): State<Arc<AppState>>,
     _admin: AuthAdmin,
     Path(org_id): Path<Uuid>,
     Json(body): Json<CreateKeyRequest>,
 ) -> Result<(StatusCode, Json<CreateKeyResponse>), (StatusCode, Json<ErrorResponse>)> {
-    // 生成 key: gc-{32 hex chars}
+    let slug: String = sqlx::query_scalar("SELECT slug FROM organizations WHERE id = $1")
+        .bind(org_id)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|_| err(StatusCode::NOT_FOUND, "Organization not found"))?;
+
     let raw_uuid = Uuid::new_v4().to_string().replace('-', "");
-    let raw_key = format!("gc-{}", &raw_uuid[..32]);
+    let raw_key = format!("gc-{}-{}", slug, &raw_uuid[..24]);
 
-    let key_prefix = raw_key[..10].to_string();
+    let key_prefix = format!("gc-{}-", slug);
 
-    // sha256 hash 用于存储
     let mut hasher = Sha256::new();
     hasher.update(raw_key.as_bytes());
     let key_hash = format!("{:x}", hasher.finalize());
@@ -441,7 +517,7 @@ async fn create_key(
     .bind(&key_prefix)
     .fetch_one(&state.pool)
     .await
-    .map_err(|e| err(StatusCode::BAD_REQUEST, e.to_string()))?;
+    .map_err(friendly_db_err)?;
 
     Ok((
         StatusCode::CREATED,
@@ -455,17 +531,17 @@ async fn create_key(
     ))
 }
 
-/// DELETE /api/keys/:id — 删除（禁用）API Key
+/// DELETE /api/keys/:id — 删除 API Key
 async fn delete_key(
     State(state): State<Arc<AppState>>,
     _admin: AuthAdmin,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let result = sqlx::query("UPDATE api_keys SET is_active = false WHERE id = $1")
+    let result = sqlx::query("DELETE FROM api_keys WHERE id = $1")
         .bind(id)
         .execute(&state.pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(friendly_db_err)?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "API key not found"));
@@ -540,7 +616,7 @@ async fn create_model(
     .bind(body.priority.unwrap_or(0))
     .fetch_one(&state.pool)
     .await
-    .map_err(|e| err(StatusCode::BAD_REQUEST, e.to_string()))?;
+    .map_err(friendly_db_err)?;
 
     Ok((StatusCode::CREATED, Json(row)))
 }
@@ -576,7 +652,7 @@ async fn update_model(
     .bind(body.is_active)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(friendly_db_err)?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Model config not found"))?;
 
     Ok(Json(row))
@@ -592,7 +668,7 @@ async fn delete_model(
         .bind(id)
         .execute(&state.pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(friendly_db_err)?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Model config not found"));

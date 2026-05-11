@@ -60,11 +60,13 @@ function orgsTab() {
 
     async createOrg() {
       try {
-        await api('/api/orgs', { method: 'POST', body: JSON.stringify(this.newOrg) });
+        const created = await api('/api/orgs', { method: 'POST', body: JSON.stringify(this.newOrg) });
         this.newOrg = { name: '', slug: '' };
         this.showCreateOrg = false;
         window.showToast(t('org_created'));
-        await this.load();
+        this.orgs = await api('/api/orgs');
+        const newOrg = this.orgs.find(o => o.id === created.id);
+        if (newOrg) await this.selectOrg(newOrg);
       } catch (e) { window.showToast(e.message, 'error'); }
     },
 

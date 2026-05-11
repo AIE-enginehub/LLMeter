@@ -1,6 +1,7 @@
 mod admin;
 mod auth;
 mod db;
+mod open_api;
 mod protocol;
 mod proxy;
 mod state;
@@ -34,6 +35,7 @@ async fn main() {
 
     // 管理后台 API + 代理/静态文件 fallback
     let app = admin::router()
+        .merge(open_api::router())
         .fallback(proxy::proxy_handler)
         .with_state(state);
 
