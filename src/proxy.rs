@@ -69,14 +69,6 @@ pub async fn proxy_handler(
 
     let (api_key_record, org) = key_info;
 
-    // 检查积分是否充足
-    if org.credit <= rust_decimal::Decimal::ZERO {
-        return Err((
-            StatusCode::PAYMENT_REQUIRED,
-            "Insufficient quota (额度不足)".to_string(),
-        ));
-    }
-
     // 异步更新 API Key 最后使用时间
     let pool_bg = state.pool.clone();
     let key_id = api_key_record.id;
@@ -96,20 +88,28 @@ pub async fn proxy_handler(
     // 3. 检测协议
     let detected_protocol = protocol::detect_protocol(&path, &parts.headers);
 
-    // 4. 提取模型名
+    // 4. 提取模型名（可能为 None，如 /v1/files, /v1/models 等辅助接口）
     let model_name = protocol::extract_model(detected_protocol, body_ref, &path);
 
-    // 5. 查找模型配置
+    // 是否为透传请求（无模型名，只记日志不记用量/积分）
+    let is_passthrough = model_name.is_none();
+
+    // 仅非透传请求才检查积分余额
+    if !is_passthrough && org.credit <= rust_decimal::Decimal::ZERO {
+        return Err((
+            StatusCode::PAYMENT_REQUIRED,
+            "Insufficient quota (额度不足)".to_string(),
+        ));
+    }
+
+    // 5. 查找模型配置；无模型名时取组织的第一个可用配置作为透传通道
     let model_config = match &model_name {
         Some(name) => crate::db::find_model_config(&state.pool, org.id, name)
             .await
             .ok_or((StatusCode::NOT_FOUND, format!("No config found for model '{name}'")))?,
-        None => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "Cannot extract model name from request".to_string(),
-            ));
-        }
+        None => crate::db::find_first_model_config(&state.pool, org.id)
+            .await
+            .ok_or((StatusCode::BAD_REQUEST, "No available model config for this organization".to_string()))?,
     };
 
     // 配置中的 protocol 字段优先
@@ -138,7 +138,7 @@ pub async fn proxy_handler(
         body_bytes.clone()
     };
 
-    // 7. 转换请求头
+    // 7. 转换请求头（透传请求保留原始 content-type 等头信息）
     let forwarded_headers =
         protocol::transform_headers(actual_protocol, &parts.headers, &model_config.real_api_key);
 
@@ -194,9 +194,9 @@ pub async fn proxy_handler(
 
     // 11. 处理响应
     if is_stream {
-        handle_streaming_response(state.pool.clone(), log_id, log_org_id, actual_protocol, upstream_resp, resp_status, start).await
+        handle_streaming_response(state.pool.clone(), log_id, log_org_id, actual_protocol, upstream_resp, resp_status, start, is_passthrough).await
     } else {
-        handle_normal_response(state.pool.clone(), log_id, log_org_id, actual_protocol, upstream_resp, resp_status, start).await
+        handle_normal_response(state.pool.clone(), log_id, log_org_id, actual_protocol, upstream_resp, resp_status, start, is_passthrough).await
     }
 }
 
@@ -230,6 +230,7 @@ async fn handle_normal_response(
     upstream_resp: reqwest::Response,
     status: reqwest::StatusCode,
     start: Instant,
+    is_passthrough: bool,
 ) -> Result<Response, (StatusCode, String)> {
     let resp_headers = upstream_resp.headers().clone();
     let resp_bytes = upstream_resp.bytes().await.map_err(|e| {
@@ -244,10 +245,11 @@ async fn handle_normal_response(
         }
     };
     
-    let usage = resp_json
-        .as_ref()
-        .map(|j| protocol::extract_token_usage(protocol, j))
-        .unwrap_or_default();
+    let usage = if is_passthrough {
+        TokenUsage::default()
+    } else {
+        resp_json.as_ref().map(|j| protocol::extract_token_usage(protocol, j)).unwrap_or_default()
+    };
 
     let duration_ms = start.elapsed().as_millis() as i32;
     let status_code = status.as_u16();
@@ -259,8 +261,6 @@ async fn handle_normal_response(
         } else {
             None
         };
-
-        tracing::info!("Executing UPDATE for log_id: {}, status: {}", log_id, status_str);
 
         let update_res = sqlx::query(
             "UPDATE request_logs SET response_status=$2, status=$3, prompt_tokens=$4, \
@@ -280,10 +280,12 @@ async fn handle_normal_response(
         .execute(&pool)
         .await;
 
-        match &update_res {
-            Ok(res) => tracing::info!("UPDATE success, rows affected: {}", res.rows_affected()),
-            Err(e) => tracing::error!("Failed to update request_log: {}", e),
+        if let Err(e) = &update_res {
+            tracing::error!("Failed to update request_log: {}", e);
         }
+
+        // 透传请求不扣积分
+        if is_passthrough { return; }
 
         // 扣除积分
         if status_str == "success" {
@@ -339,6 +341,7 @@ async fn handle_streaming_response(
     upstream_resp: reqwest::Response,
     status: reqwest::StatusCode,
     start: Instant,
+    is_passthrough: bool,
 ) -> Result<Response, (StatusCode, String)> {
     let resp_headers = upstream_resp.headers().clone();
     let byte_stream = upstream_resp.bytes_stream();
@@ -397,10 +400,12 @@ async fn handle_streaming_response(
             .execute(&pool_clone)
             .await;
 
-            match &update_res {
-                Ok(res) => tracing::info!("Streaming UPDATE success, rows affected: {}", res.rows_affected()),
-                Err(e) => tracing::error!("Failed to update request_log (stream): {}", e),
+            if let Err(e) = &update_res {
+                tracing::error!("Failed to update request_log (stream): {}", e);
             }
+
+            // 透传请求不扣积分
+            if is_passthrough { return; }
 
             // 扣除积分
             if status_str == "success" {
