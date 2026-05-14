@@ -102,14 +102,19 @@ pub async fn proxy_handler(
         ));
     }
 
-    // 5. 查找模型配置；无模型名时取组织的第一个可用配置作为透传通道
+    // 5. 查找模型配置；无模型名时按检测到的协议取匹配的配置作为透传通道
+    let protocol_str = match detected_protocol {
+        Protocol::OpenAI => "openai",
+        Protocol::Anthropic => "anthropic",
+        Protocol::Gemini => "gemini",
+    };
     let model_config = match &model_name {
         Some(name) => crate::db::find_model_config(&state.pool, org.id, name)
             .await
             .ok_or((StatusCode::NOT_FOUND, format!("No config found for model '{name}'")))?,
-        None => crate::db::find_first_model_config(&state.pool, org.id)
+        None => crate::db::find_first_model_config(&state.pool, org.id, protocol_str)
             .await
-            .ok_or((StatusCode::BAD_REQUEST, "No available model config for this organization".to_string()))?,
+            .ok_or((StatusCode::BAD_REQUEST, format!("No available {protocol_str} model config for this organization")))?,
     };
 
     // 配置中的 protocol 字段优先
@@ -142,14 +147,21 @@ pub async fn proxy_handler(
     let forwarded_headers =
         protocol::transform_headers(actual_protocol, &parts.headers, &model_config.real_api_key);
 
-    // 8. 构造目标 URL：去掉请求路径中的协议前缀以避免重复
+    // 8. 构造目标 URL
     let base_url = model_config.base_url.trim_end_matches('/');
-    let stripped_path = strip_protocol_prefix(&path, actual_protocol);
-    let target_url = if query.is_empty() {
-        format!("{base_url}{stripped_path}")
+    let target_url = if is_passthrough {
+        // 透传请求：提取 base_url 的 origin（scheme + host），直接拼接原始路径
+        // 无论 base_url 是 "https://api.openai.com/v1" 还是 "https://api.openai.com"
+        // 都统一取 "https://api.openai.com" + "/v1/files" = "https://api.openai.com/v1/files"
+        let origin = base_url.find("://")
+            .and_then(|i| base_url[i + 3..].find('/').map(|j| &base_url[..i + 3 + j]))
+            .unwrap_or(base_url);
+        if query.is_empty() { format!("{origin}{path}") } else { format!("{origin}{path}?{query}") }
     } else {
-        format!("{base_url}{stripped_path}?{query}")
+        let stripped_path = strip_protocol_prefix(&path, actual_protocol);
+        if query.is_empty() { format!("{base_url}{stripped_path}") } else { format!("{base_url}{stripped_path}?{query}") }
     };
+    tracing::info!("Proxy: {} {} -> {}", method, path, target_url);
     // 9. 转发请求
     let upstream_resp = state
         .http_client

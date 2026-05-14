@@ -217,15 +217,16 @@ pub async fn deduct_credit(
     Ok(())
 }
 
-/// 获取组织的第一个可用模型配置（用于无模型名的透传请求，如 /v1/files, /v1/models）
-pub async fn find_first_model_config(pool: &PgPool, org_id: Uuid) -> Option<ModelConfig> {
+/// 获取组织中指定协议的第一个可用模型配置（用于无模型名的透传请求，如 /v1/files, /v1/models）
+pub async fn find_first_model_config(pool: &PgPool, org_id: Uuid, protocol: &str) -> Option<ModelConfig> {
     sqlx::query_as::<_, ModelConfig>(
         "SELECT id, org_id, name, protocol, model_patterns, base_url, \
                 real_api_key, priority, is_active, created_at, updated_at \
-         FROM model_configs WHERE org_id = $1 AND is_active = true \
+         FROM model_configs WHERE org_id = $1 AND is_active = true AND protocol = $2 \
          ORDER BY priority DESC LIMIT 1"
     )
     .bind(org_id)
+    .bind(protocol)
     .fetch_optional(pool)
     .await
     .ok()?
