@@ -142,14 +142,18 @@ pub fn extract_token_usage(protocol: Protocol, body: &Value) -> TokenUsage {
     match protocol {
         Protocol::OpenAI => {
             let usage = &body["usage"];
-            TokenUsage {
-                prompt_tokens: usage["prompt_tokens"].as_i64().map(|v| v as i32),
-                completion_tokens: usage["completion_tokens"].as_i64().map(|v| v as i32),
-                cached_tokens: usage["prompt_tokens_details"]["cached_tokens"]
-                    .as_i64()
-                    .map(|v| v as i32),
-                total_tokens: usage["total_tokens"].as_i64().map(|v| v as i32),
-            }
+            // 兼容 Chat Completions API (prompt_tokens) 和 Responses API (input_tokens)
+            let prompt = usage["prompt_tokens"].as_i64()
+                .or_else(|| usage["input_tokens"].as_i64())
+                .map(|v| v as i32);
+            let completion = usage["completion_tokens"].as_i64()
+                .or_else(|| usage["output_tokens"].as_i64())
+                .map(|v| v as i32);
+            let cached = usage["prompt_tokens_details"]["cached_tokens"].as_i64()
+                .or_else(|| usage["input_tokens_details"]["cached_tokens"].as_i64())
+                .map(|v| v as i32);
+            let total = usage["total_tokens"].as_i64().map(|v| v as i32);
+            TokenUsage { prompt_tokens: prompt, completion_tokens: completion, cached_tokens: cached, total_tokens: total }
         }
         Protocol::Anthropic => {
             let usage = &body["usage"];
