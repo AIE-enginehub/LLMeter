@@ -17,6 +17,30 @@ AI API 代理网关 —— 统一代理转发各 AI 厂商 API，支持多组织
 - **流式支持**：完整支持 SSE 流式响应，代理过程中实时转发。
 - **高性能**：基于 Rust (Axum + Tokio) 构建，极低的内存占用与极高的并发处理能力。
 
+## 📸 界面预览
+
+### 概览
+
+![概览](docs/images_zh/首页.png)
+
+### 组织管理
+
+![组织管理](docs/images_zh/组织管理.png)
+
+### 调用日志
+
+![日志列表](docs/images_zh/日志列表.png)
+
+![日志详情](docs/images_zh/日志详情.png)
+
+### 用量统计
+
+![用量统计](docs/images_zh/用量统计.png)
+
+### 系统设置
+
+![系统设置](docs/images_zh/设置.png)
+
 ## 🚀 快速开始（Docker Compose）
 
 最简单的启动方式是使用 Docker Compose。
