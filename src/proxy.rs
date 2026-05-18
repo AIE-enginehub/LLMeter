@@ -94,8 +94,28 @@ pub async fn proxy_handler(
     // 是否为透传请求（无模型名，只记日志不记用量/积分）
     let is_passthrough = model_name.is_none();
 
-    // 仅非透传请求才检查积分余额
-    if !is_passthrough && org.credit <= rust_decimal::Decimal::ZERO {
+    // 仅非透传请求才检查积分余额（支持透支额度：credit + overdraft_limit <= 0 时拒绝）
+    if !is_passthrough && org.credit + org.overdraft_limit <= rust_decimal::Decimal::ZERO {
+        let provider = match detected_protocol {
+            Protocol::OpenAI => "openai",
+            Protocol::Anthropic => "anthropic",
+            Protocol::Gemini => "gemini",
+        };
+        let log_id = Uuid::new_v4();
+        let _ = sqlx::query(
+            "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, request_body, status, error_message, response_status, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, false, $8, 'error', 'Insufficient quota', 402, now())"
+        )
+        .bind(log_id)
+        .bind(org.id)
+        .bind(api_key_record.id)
+        .bind(provider)
+        .bind(model_name.as_deref())
+        .bind(&path)
+        .bind(method.to_string())
+        .bind(body_json.as_ref())
+        .execute(&state.pool)
+        .await;
         return Err((
             StatusCode::PAYMENT_REQUIRED,
             "Insufficient quota (额度不足)".to_string(),
@@ -362,24 +382,37 @@ async fn handle_streaming_response(
     let status_code = status.as_u16();
     let (usage_tx, usage_rx) = tokio::sync::oneshot::channel::<(TokenUsage, i32, String)>();
 
+    // line_buf 用于缓冲跨 chunk 的不完整 SSE 行，确保 usage 提取不会因行被截断而丢失
     let body_stream = stream::unfold(
-        (byte_stream, Some(usage_tx), TokenUsage::default(), String::new()),
-        move |(mut stream, tx, mut last_usage, mut accumulated_body)| async move {
+        (byte_stream, Some(usage_tx), TokenUsage::default(), String::new(), String::new()),
+        move |(mut stream, tx, mut last_usage, mut accumulated_body, mut line_buf)| async move {
             match stream.next().await {
                 Some(Ok(chunk)) => {
                     if let Ok(text) = std::str::from_utf8(&chunk) {
                         accumulated_body.push_str(text);
-                        if let Some(usage) = protocol::extract_streaming_usage(proto, text) {
-                            last_usage = protocol::merge_token_usage(Some(last_usage), usage);
+                        line_buf.push_str(text);
+                        // 只处理以 \n 结尾的完整行，不完整的末尾保留到下个 chunk
+                        if let Some(last_newline) = line_buf.rfind('\n') {
+                            let complete = line_buf[..=last_newline].to_string();
+                            line_buf = line_buf[last_newline + 1..].to_string();
+                            if let Some(usage) = protocol::extract_streaming_usage(proto, &complete) {
+                                last_usage = protocol::merge_token_usage(Some(last_usage), usage);
+                            }
                         }
                     }
-                    Some((Ok::<Bytes, std::io::Error>(chunk), (stream, tx, last_usage, accumulated_body)))
+                    Some((Ok::<Bytes, std::io::Error>(chunk), (stream, tx, last_usage, accumulated_body, line_buf)))
                 }
                 Some(Err(e)) => {
                     let io_err = std::io::Error::new(std::io::ErrorKind::Other, e.to_string());
-                    Some((Err(io_err), (stream, tx, last_usage, accumulated_body)))
+                    Some((Err(io_err), (stream, tx, last_usage, accumulated_body, line_buf)))
                 }
                 None => {
+                    // 处理缓冲区中剩余的不完整行
+                    if !line_buf.is_empty() {
+                        if let Some(usage) = protocol::extract_streaming_usage(proto, &line_buf) {
+                            last_usage = protocol::merge_token_usage(Some(last_usage), usage);
+                        }
+                    }
                     if let Some(tx) = tx {
                         let _ = tx.send((last_usage, start.elapsed().as_millis() as i32, accumulated_body));
                     }

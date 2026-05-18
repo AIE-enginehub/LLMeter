@@ -114,7 +114,9 @@ struct OrgRow {
     name: String,
     slug: String,
     credit: rust_decimal::Decimal,
+    overdraft_limit: rust_decimal::Decimal,
     is_active: bool,
+    total_consumed: Option<rust_decimal::Decimal>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -358,6 +360,7 @@ struct UpdateOrgRequest {
     name: Option<String>,
     slug: Option<String>,
     is_active: Option<bool>,
+    overdraft_limit: Option<rust_decimal::Decimal>,
 }
 
 /// GET /api/orgs — 列出所有组织
@@ -366,7 +369,10 @@ async fn list_orgs(
     _admin: AuthAdmin,
 ) -> Result<Json<Vec<OrgRow>>, (StatusCode, Json<ErrorResponse>)> {
     let rows = sqlx::query_as::<_, OrgRow>(
-        "SELECT id, name, slug, credit, is_active, created_at, updated_at FROM organizations ORDER BY created_at DESC",
+        "SELECT o.id, o.name, o.slug, o.credit, o.overdraft_limit, o.is_active, \
+                COALESCE((SELECT ABS(SUM(amount)) FROM credit_logs WHERE org_id = o.id AND transaction_type = 'consume'), 0) AS total_consumed, \
+                o.created_at, o.updated_at \
+         FROM organizations o ORDER BY o.created_at DESC",
     )
     .fetch_all(&state.pool)
     .await
@@ -383,7 +389,7 @@ async fn create_org(
 ) -> Result<(StatusCode, Json<OrgRow>), (StatusCode, Json<ErrorResponse>)> {
     let row = sqlx::query_as::<_, OrgRow>(
         "INSERT INTO organizations (name, slug) VALUES ($1, $2) \
-         RETURNING id, name, slug, credit, is_active, created_at, updated_at",
+         RETURNING id, name, slug, credit, overdraft_limit, is_active, 0::NUMERIC AS total_consumed, created_at, updated_at",
     )
     .bind(&body.name)
     .bind(&body.slug)
@@ -406,14 +412,18 @@ async fn update_org(
             name = COALESCE($2, name), \
             slug = COALESCE($3, slug), \
             is_active = COALESCE($4, is_active), \
+            overdraft_limit = COALESCE($5, overdraft_limit), \
             updated_at = now() \
          WHERE id = $1 \
-         RETURNING id, name, slug, credit, is_active, created_at, updated_at",
+         RETURNING id, name, slug, credit, overdraft_limit, is_active, \
+                   COALESCE((SELECT ABS(SUM(amount)) FROM credit_logs WHERE org_id = id AND transaction_type = 'consume'), 0) AS total_consumed, \
+                   created_at, updated_at",
     )
     .bind(id)
     .bind(&body.name)
     .bind(&body.slug)
     .bind(body.is_active)
+    .bind(body.overdraft_limit)
     .fetch_optional(&state.pool)
     .await
     .map_err(friendly_db_err)?
@@ -884,7 +894,9 @@ async fn recharge_credit(
 
     let row = sqlx::query_as::<_, OrgRow>(
         "UPDATE organizations SET credit = credit + $1, updated_at = now() WHERE id = $2 \
-         RETURNING id, name, slug, credit, is_active, created_at, updated_at"
+         RETURNING id, name, slug, credit, overdraft_limit, is_active, \
+                   COALESCE((SELECT ABS(SUM(amount)) FROM credit_logs WHERE org_id = id AND transaction_type = 'consume'), 0) AS total_consumed, \
+                   created_at, updated_at"
     )
     .bind(body.amount)
     .bind(id)
@@ -912,22 +924,64 @@ async fn recharge_credit(
     Ok(Json(row))
 }
 
-/// GET /api/orgs/:id/credit_logs
+/// GET /api/orgs/:id/credit_logs?page=1&page_size=20&type=consume
 async fn list_credit_logs(
     State(state): State<Arc<AppState>>,
     _admin: AuthAdmin,
     Path(id): Path<Uuid>,
-) -> Result<Json<Vec<CreditLogSummary>>, (StatusCode, Json<ErrorResponse>)> {
-    let rows = sqlx::query_as::<_, CreditLogSummary>(
-        "SELECT id, org_id, amount, balance_after, transaction_type, reference_id, created_at \
-         FROM credit_logs WHERE org_id = $1 ORDER BY created_at DESC LIMIT 100"
-    )
-    .bind(id)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Query(params): Query<CreditLogQuery>,
+) -> Result<Json<CreditLogPage>, (StatusCode, Json<ErrorResponse>)> {
+    let page = params.page.unwrap_or(1).max(1);
+    let page_size = params.page_size.unwrap_or(20).min(100);
+    let offset = (page - 1) * page_size;
 
-    Ok(Json(rows))
+    let (where_extra, type_filter) = match &params.r#type {
+        Some(t) if !t.is_empty() => (" AND transaction_type = $2", Some(t.as_str())),
+        _ => ("", None),
+    };
+
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM credit_logs WHERE org_id = $1{where_extra}"
+    );
+    let data_sql = format!(
+        "SELECT id, org_id, amount, balance_after, transaction_type, reference_id, created_at \
+         FROM credit_logs WHERE org_id = $1{where_extra} ORDER BY created_at DESC LIMIT {} OFFSET {}",
+        page_size, offset
+    );
+
+    let total: i64 = if let Some(tf) = type_filter {
+        sqlx::query_scalar(&count_sql).bind(id).bind(tf).fetch_one(&state.pool).await
+    } else {
+        sqlx::query_scalar(&count_sql).bind(id).fetch_one(&state.pool).await
+    }.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let rows: Vec<CreditLogSummary> = if let Some(tf) = type_filter {
+        sqlx::query_as(&data_sql).bind(id).bind(tf).fetch_all(&state.pool).await
+    } else {
+        sqlx::query_as(&data_sql).bind(id).fetch_all(&state.pool).await
+    }.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(CreditLogPage {
+        data: rows,
+        total,
+        page,
+        page_size,
+    }))
+}
+
+#[derive(Deserialize)]
+struct CreditLogQuery {
+    page: Option<i64>,
+    page_size: Option<i64>,
+    r#type: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CreditLogPage {
+    data: Vec<CreditLogSummary>,
+    total: i64,
+    page: i64,
+    page_size: i64,
 }
 
 #[derive(Deserialize)]

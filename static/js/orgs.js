@@ -20,6 +20,10 @@ function orgsTab() {
     rechargeAmount: 0,
     rechargeNote: '',
     creditLogs: [],
+    creditLogPage: 1,
+    creditLogPageSize: 15,
+    creditLogTotal: 0,
+    creditLogType: '',
     modelForm: { id: null, name: '', protocol: 'openai', model_patterns: '', base_url: '', real_api_key: '', priority: 0 },
 
     async load() {
@@ -46,7 +50,7 @@ function orgsTab() {
 
     async selectOrg(org) {
       this.selectedOrg = org;
-      this.editOrg = { name: org.name, slug: org.slug, is_active: org.is_active ? 'true' : 'false', credit: org.credit || 0 };
+      this.editOrg = { name: org.name, slug: org.slug, is_active: org.is_active ? 'true' : 'false', credit: org.credit || 0, overdraft_limit: org.overdraft_limit || 0, total_consumed: org.total_consumed || 0 };
       await Promise.all([this.loadKeys(), this.loadModels()]);
     },
 
@@ -75,10 +79,13 @@ function orgsTab() {
         const updated = await api(`/api/orgs/${this.selectedOrg.id}`, { method: 'PUT', body: JSON.stringify({
           name: this.editOrg.name,
           slug: this.editOrg.slug,
-          is_active: this.editOrg.is_active === 'true' || this.editOrg.is_active === true
+          is_active: this.editOrg.is_active === 'true' || this.editOrg.is_active === true,
+          overdraft_limit: Number(this.editOrg.overdraft_limit) || 0
         }) });
         Object.assign(this.selectedOrg, updated);
         this.editOrg.is_active = updated.is_active;
+        this.editOrg.overdraft_limit = updated.overdraft_limit || 0;
+        this.editOrg.total_consumed = updated.total_consumed || 0;
         window.showToast(t('save_success'));
         await this.load();
       } catch (e) { window.showToast(e.message, 'error'); }
@@ -109,11 +116,28 @@ function orgsTab() {
       } catch (e) { window.showToast(e.message, 'error'); }
     },
 
-    async loadCreditLogs() {
+    async loadCreditLogs(resetPage = true) {
+      if (resetPage) this.creditLogPage = 1;
       try {
-        this.creditLogs = await api(`/api/orgs/${this.selectedOrg.id}/credit_logs`);
+        const params = new URLSearchParams({ page: this.creditLogPage, page_size: this.creditLogPageSize });
+        if (this.creditLogType) params.set('type', this.creditLogType);
+        const res = await api(`/api/orgs/${this.selectedOrg.id}/credit_logs?${params}`);
+        this.creditLogs = res.data;
+        this.creditLogTotal = res.total;
         this.showCreditLogs = true;
       } catch (e) { window.showToast(e.message, 'error'); }
+    },
+
+    get creditLogTotalPages() {
+      return Math.max(1, Math.ceil(this.creditLogTotal / this.creditLogPageSize));
+    },
+
+    async creditLogPrev() {
+      if (this.creditLogPage > 1) { this.creditLogPage--; await this.loadCreditLogs(false); }
+    },
+
+    async creditLogNext() {
+      if (this.creditLogPage < this.creditLogTotalPages) { this.creditLogPage++; await this.loadCreditLogs(false); }
     },
 
     async createKey() {

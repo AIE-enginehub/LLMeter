@@ -13,6 +13,7 @@ pub struct Organization {
     pub name: String,
     pub slug: String,
     pub credit: rust_decimal::Decimal,
+    pub overdraft_limit: rust_decimal::Decimal,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -64,8 +65,9 @@ pub async fn init_pool(database_url: &str) -> PgPool {
 pub async fn run_migrations(pool: &PgPool) {
     let sql1 = include_str!("../migrations/001_init.sql");
     let sql2 = include_str!("../migrations/002_credit_system.sql");
+    let sql3 = include_str!("../migrations/003_overdraft.sql");
 
-    for sql in [sql1, sql2] {
+    for sql in [sql1, sql2, sql3] {
         for statement in sql.split(';') {
             let meaningful: String = statement
                 .lines()
@@ -97,8 +99,8 @@ pub async fn find_api_key_by_hash(
         SELECT
             k.id AS k_id, k.org_id, k.name AS k_name, k.key_hash, k.key_prefix,
             k.is_active AS k_active, k.last_used_at, k.created_at AS k_created,
-            o.id AS o_id, o.name AS o_name, o.slug, o.credit, o.is_active AS o_active,
-            o.created_at AS o_created, o.updated_at AS o_updated
+            o.id AS o_id, o.name AS o_name, o.slug, o.credit, o.overdraft_limit,
+            o.is_active AS o_active, o.created_at AS o_created, o.updated_at AS o_updated
         FROM api_keys k
         JOIN organizations o ON o.id = k.org_id
         WHERE k.key_hash = $1 AND k.is_active = true AND o.is_active = true
@@ -125,6 +127,7 @@ pub async fn find_api_key_by_hash(
         name: rec.get("o_name"),
         slug: rec.get("slug"),
         credit: rec.get("credit"),
+        overdraft_limit: rec.get("overdraft_limit"),
         is_active: rec.get("o_active"),
         created_at: rec.get("o_created"),
         updated_at: rec.get("o_updated"),
