@@ -17,6 +17,30 @@ An AI API Proxy Gateway — Unify, proxy, and forward APIs from various AI provi
 - **Streaming Support**: Fully supports SSE (Server-Sent Events) streaming responses, forwarding chunks in real-time.
 - **High Performance**: Built with Rust (Axum + Tokio) for extremely low memory footprint and high concurrency.
 
+## 📸 Screenshots
+
+### Overview
+
+![Overview](docs/images_en/Overview.png)
+
+### Organizations
+
+![Organizations](docs/images_en/Org_List.png)
+
+### Logs
+
+![Log List](docs/images_en/Log_List.png)
+
+![Log Detail](docs/images_en/Log_Detail.png)
+
+### Usage Statistics
+
+![Usage Statistics](docs/images_en/Usage.png)
+
+### Settings
+
+![Settings](docs/images_en/Settings.png)
+
 ## 🚀 Quick Start (Docker Compose)
 
 The easiest way to get started is using Docker Compose.
