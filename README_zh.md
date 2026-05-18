@@ -1,4 +1,4 @@
-# Gongs Credit
+# LLMeter
 
 [English](README.md) | [中文](README_zh.md)
 
@@ -23,8 +23,8 @@ AI API 代理网关 —— 统一代理转发各 AI 厂商 API，支持多组织
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/your-repo/gongs-credit.git
-cd gongs-credit
+git clone https://github.com/AIE-enginehub/LLMeter.git
+cd LLMeter
 
 # 2. 启动服务（包含 PostgreSQL + 应用）
 docker compose up -d
@@ -53,14 +53,14 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 # 2. 配置环境变量
 cp .env.example .env
 # 编辑 .env，确保 DATABASE_URL 指向你的 PostgreSQL 数据库
-# 例如: DATABASE_URL=postgres://postgres:password@localhost:5432/gongs_credit
+# 例如: DATABASE_URL=postgres://postgres:password@localhost:5432/llmeter
 
 # 3. 编译并运行
 cargo run
 
 # 或编译 release 版本
 cargo build --release
-./target/release/gongs-credit
+./target/release/llmeter
 ```
 
 服务启动后会自动执行数据库迁移并创建默认管理员用户。

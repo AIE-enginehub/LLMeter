@@ -7,7 +7,7 @@ window.lang = localStorage.getItem('lang') || 'zh';
 window.i18nDict = {
   "zh": {
     "login": "登 录", "logging_in": "登录中…", "username": "用户名", "password": "密码",
-    "title": "gongs-credit", "subtitle": "API 网关管理后台",
+    "title": "LLMeter", "subtitle": "API 网关管理后台",
     "logout": "退出", "overview": "概览", "orgs": "组织管理", "logs": "调用日志",
     "usage": "用量统计", "settings": "系统设置",
     "total_req": "总请求", "success": "成功", "error": "错误",
@@ -88,7 +88,7 @@ window.i18nDict = {
   "en": {
     "login": "Login", "logging_in": "Logging in...",
     "username": "Username", "password": "Password",
-    "title": "gongs-credit", "subtitle": "API Gateway Admin",
+    "title": "LLMeter", "subtitle": "API Gateway Admin",
     "logout": "Logout", "overview": "Overview", "orgs": "Organizations",
     "logs": "Logs", "usage": "Usage Stats", "settings": "Settings",
     "total_req": "Total Requests", "success": "Success", "error": "Error",

@@ -46,7 +46,7 @@ async fn main() {
         tracing::error!("端口 {port} 绑定失败: {e}（可能已被其他进程占用）");
         std::process::exit(1);
     });
-    tracing::info!("gongs-credit listening on {addr}");
+    tracing::info!("LLMeter listening on {addr}");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

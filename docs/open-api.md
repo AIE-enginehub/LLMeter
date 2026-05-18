@@ -1,6 +1,6 @@
 # Open API 对接文档
 
-gongs-credit 提供开放 API 供各组织查询自身的 Credit（积分）消耗情况，方便与内部系统对接。
+LLMeter 提供开放 API 供各组织查询自身的 Credit（积分）消耗情况，方便与内部系统对接。
 
 ## 鉴权
 

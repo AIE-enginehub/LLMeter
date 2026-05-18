@@ -35,7 +35,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     # 重试机制：如果 cargo build 失败，则重试最多 3 次
     cargo build --release || cargo build --release || cargo build --release \
-    && cp /app/target/release/gongs-credit /app/gongs-credit
+    && cp /app/target/release/llmeter /app/llmeter
 
 # ===== 运行阶段 =====
 FROM docker.m.daocloud.io/library/debian:bullseye-slim
@@ -49,10 +49,10 @@ RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
 
 WORKDIR /app
 # 从 builder 阶段复制编译好的二进制文件
-COPY --from=builder /app/gongs-credit .
+COPY --from=builder /app/llmeter .
 # 因为启用了 rust-embed 的 debug-embed 特性，运行时需要读取实际文件
 COPY static/ static/
 
 EXPOSE 5000
 
-CMD ["./gongs-credit"]
+CMD ["./llmeter"]

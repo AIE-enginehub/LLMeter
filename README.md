@@ -1,4 +1,4 @@
-# Gongs Credit
+# LLMeter
 
 [English](README.md) | [中文](README_zh.md)
 
@@ -23,8 +23,8 @@ The easiest way to get started is using Docker Compose.
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-repo/gongs-credit.git
-cd gongs-credit
+git clone https://github.com/AIE-enginehub/LLMeter.git
+cd LLMeter
 
 # 2. Start the services (PostgreSQL + App)
 docker compose up -d
@@ -53,14 +53,14 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 # 2. Configure environment variables
 cp .env.example .env
 # Edit .env and ensure DATABASE_URL points to your PostgreSQL instance
-# Example: DATABASE_URL=postgres://postgres:password@localhost:5432/gongs_credit
+# Example: DATABASE_URL=postgres://postgres:password@localhost:5432/llmeter
 
 # 3. Build and run
 cargo run
 
 # Or build the release version
 cargo build --release
-./target/release/gongs-credit
+./target/release/llmeter
 ```
 
 The service will automatically run database migrations and create the default admin user upon startup.

@@ -788,39 +788,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9985c9503b412198aa4197559e9a318524ebc4519c229bfa05a535828c950b9d"
 
 [[package]]
-name = "gongs-credit"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "axum",
- "axum-extra",
- "bytes",
- "chrono",
- "dotenvy",
- "futures",
- "glob-match",
- "hex",
- "http",
- "http-body-util",
- "jsonwebtoken",
- "mime_guess",
- "rand 0.9.4",
- "reqwest",
- "rust-embed",
- "rust_decimal",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "h2"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1304,6 +1271,39 @@ name = "litemap"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
+
+[[package]]
+name = "llmeter"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "axum",
+ "axum-extra",
+ "bytes",
+ "chrono",
+ "dotenvy",
+ "futures",
+ "glob-match",
+ "hex",
+ "http",
+ "http-body-util",
+ "jsonwebtoken",
+ "mime_guess",
+ "rand 0.9.4",
+ "reqwest",
+ "rust-embed",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
 
 [[package]]
 name = "lock_api"
