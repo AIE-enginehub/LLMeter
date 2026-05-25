@@ -3,7 +3,10 @@
  */
 function usageTab() {
   return {
+    ...dateRangePicker(),
     days: 7,
+    useCustomRange: false,
+    customRange: { start: '', end: '' },
     loading: false,
     stats: null,
     orgs: [],
@@ -11,6 +14,15 @@ function usageTab() {
     /** 当前视角: 'token' | 'credit' */
     perspective: 'token',
     filter: { org_id: '', api_key_id: '', model: '' },
+
+    selectCustomStart(cell) {
+      const val = this._drp_select(cell);
+      if (val) { this.customRange.start = val; this._drp_showPanel = ''; this.load(); }
+    },
+    selectCustomEnd(cell) {
+      const val = this._drp_select(cell);
+      if (val) { this.customRange.end = val; this._drp_showPanel = ''; this.load(); }
+    },
     modelSearchTimer: null,
 
     get maxReq() {
@@ -34,7 +46,13 @@ function usageTab() {
         if (this.orgs.length === 0) {
           this.orgs = await api('/api/orgs');
         }
-        let url = `/api/stats?days=${this.days}`;
+        let url = '/api/stats';
+        if (this.useCustomRange && this.customRange.start) {
+          url += `?start_time=${encodeURIComponent(this.customRange.start.replace('T', ' '))}`;
+          if (this.customRange.end) url += `&end_time=${encodeURIComponent(this.customRange.end.replace('T', ' '))}`;
+        } else {
+          url += `?days=${this.days}`;
+        }
         if (this.filter.org_id) url += `&org_id=${this.filter.org_id}`;
         if (this.filter.api_key_id) url += `&api_key_id=${this.filter.api_key_id}`;
         if (this.filter.model) url += `&model=${encodeURIComponent(this.filter.model)}`;

@@ -105,6 +105,83 @@ function friendlyError(msg) {
   return msg;
 }
 
+/**
+ * 日期范围选择器 Mixin — 提供弹出式日历面板，支持中英文
+ * 使用方式：在需要日期筛选的组件中 spread 此 mixin
+ */
+function dateRangePicker() {
+  const pad = n => String(n).padStart(2, '0');
+  const today = new Date();
+  const fmtDate = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+  return {
+    _drp_showPanel: '',
+    _drp_viewYear: today.getFullYear(),
+    _drp_viewMonth: today.getMonth(),
+
+    get _drp_monthLabel() {
+      const months_zh = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+      const months_en = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const m = window.lang === 'en' ? months_en : months_zh;
+      return `${this._drp_viewYear} ${m[this._drp_viewMonth]}`;
+    },
+
+    get _drp_weekDays() {
+      return window.lang === 'en'
+        ? ['Mo','Tu','We','Th','Fr','Sa','Su']
+        : ['一','二','三','四','五','六','日'];
+    },
+
+    get _drp_days() {
+      const y = this._drp_viewYear, m = this._drp_viewMonth;
+      const firstDay = new Date(y, m, 1).getDay();
+      const offset = (firstDay + 6) % 7;
+      const daysInMonth = new Date(y, m + 1, 0).getDate();
+      const daysInPrev = new Date(y, m, 0).getDate();
+      const cells = [];
+      for (let i = offset - 1; i >= 0; i--) cells.push({ d: daysInPrev - i, cur: false });
+      for (let i = 1; i <= daysInMonth; i++) cells.push({ d: i, cur: true });
+      const remaining = 42 - cells.length;
+      for (let i = 1; i <= remaining; i++) cells.push({ d: i, cur: false });
+      return cells;
+    },
+
+    _drp_open(which, currentVal) {
+      this._drp_showPanel = which;
+      const d = currentVal ? new Date(currentVal) : new Date();
+      this._drp_viewYear = d.getFullYear();
+      this._drp_viewMonth = d.getMonth();
+    },
+
+    _drp_prevMonth() {
+      if (this._drp_viewMonth === 0) { this._drp_viewYear--; this._drp_viewMonth = 11; }
+      else this._drp_viewMonth--;
+    },
+
+    _drp_nextMonth() {
+      if (this._drp_viewMonth === 11) { this._drp_viewYear++; this._drp_viewMonth = 0; }
+      else this._drp_viewMonth++;
+    },
+
+    _drp_select(cell) {
+      if (!cell.cur) return;
+      const val = fmtDate(new Date(this._drp_viewYear, this._drp_viewMonth, cell.d));
+      return val;
+    },
+
+    _drp_isToday(cell) {
+      return cell.cur && cell.d === today.getDate()
+        && this._drp_viewMonth === today.getMonth()
+        && this._drp_viewYear === today.getFullYear();
+    },
+
+    _drp_fmtDisplay(val) {
+      if (!val) return window.lang === 'en' ? 'Select date' : '选择日期';
+      return val;
+    },
+  };
+}
+
 /** 封装 fetch 请求，自动处理 JSON 和错误 */
 async function api(url, options = {}) {
   const res = await fetch(url, {

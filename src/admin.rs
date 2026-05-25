@@ -702,6 +702,8 @@ struct LogQuery {
     api_key_id: Option<Uuid>,
     model: Option<String>,
     status: Option<String>,
+    start_time: Option<String>,
+    end_time: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -742,6 +744,20 @@ async fn list_logs(
         conditions.push(format!("status = ${param_idx}"));
         param_idx += 1;
     }
+    let start_ts = q.start_time.as_ref().and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
+        .or_else(|| chrono::NaiveDateTime::parse_from_str(&format!("{s} 00:00:00"), "%Y-%m-%d %H:%M:%S").ok()))
+        .map(|dt| dt.and_utc());
+    let end_ts = q.end_time.as_ref().and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
+        .or_else(|| chrono::NaiveDateTime::parse_from_str(&format!("{s} 23:59:59"), "%Y-%m-%d %H:%M:%S").ok()))
+        .map(|dt| dt.and_utc());
+    if start_ts.is_some() {
+        conditions.push(format!("created_at >= ${param_idx}"));
+        param_idx += 1;
+    }
+    if end_ts.is_some() {
+        conditions.push(format!("created_at <= ${param_idx}"));
+        param_idx += 1;
+    }
 
     let where_clause = if conditions.is_empty() {
         String::new()
@@ -762,6 +778,12 @@ async fn list_logs(
         count_query = count_query.bind(format!("%{v}%"));
     }
     if let Some(ref v) = q.status {
+        count_query = count_query.bind(v);
+    }
+    if let Some(ref v) = start_ts {
+        count_query = count_query.bind(v);
+    }
+    if let Some(ref v) = end_ts {
         count_query = count_query.bind(v);
     }
 
@@ -793,6 +815,12 @@ async fn list_logs(
         data_query = data_query.bind(format!("%{v}%"));
     }
     if let Some(ref v) = q.status {
+        data_query = data_query.bind(v);
+    }
+    if let Some(ref v) = start_ts {
+        data_query = data_query.bind(v);
+    }
+    if let Some(ref v) = end_ts {
         data_query = data_query.bind(v);
     }
     data_query = data_query.bind(page_size).bind(offset);
@@ -992,6 +1020,8 @@ struct StatsQuery {
     org_id: Option<Uuid>,
     api_key_id: Option<Uuid>,
     model: Option<String>,
+    start_time: Option<String>,
+    end_time: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1058,12 +1088,22 @@ async fn get_stats(
     _admin: AuthAdmin,
     Query(q): Query<StatsQuery>,
 ) -> Result<Json<StatsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let days = q.days.unwrap_or(7).max(1);
-    let since = Utc::now() - chrono::TimeDelta::days(days as i64);
+    // 时间范围：优先使用 start_time/end_time，否则按 days 计算
+    let parse_ts = |s: &str| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
+        .or_else(|| chrono::NaiveDateTime::parse_from_str(&format!("{s} 00:00:00"), "%Y-%m-%d %H:%M:%S").ok())
+        .map(|dt| dt.and_utc());
+
+    let since = q.start_time.as_deref().and_then(parse_ts)
+        .unwrap_or_else(|| Utc::now() - chrono::TimeDelta::days(q.days.unwrap_or(7).max(1) as i64));
+    let until: Option<DateTime<Utc>> = q.end_time.as_deref().and_then(parse_ts);
 
     // 动态构建 WHERE 条件和参数
     let mut extra_where = String::new();
     let mut param_idx: u32 = 2; // $1 = since
+    if until.is_some() {
+        extra_where += &format!(" AND created_at <= ${param_idx}");
+        param_idx += 1;
+    }
     if q.org_id.is_some() {
         extra_where += &format!(" AND org_id = ${param_idx}");
         param_idx += 1;
@@ -1074,7 +1114,6 @@ async fn get_stats(
     }
     if q.model.is_some() {
         extra_where += &format!(" AND model ILIKE ${param_idx}");
-        // param_idx += 1; // 最后一个不需要再递增
     }
 
     let model_pattern = q.model.as_ref().map(|m| format!("%{m}%"));
@@ -1083,6 +1122,7 @@ async fn get_stats(
     macro_rules! bind_filters {
         ($query:expr) => {{
             let mut q_inner = $query;
+            if let Some(ref u) = until { q_inner = q_inner.bind(u); }
             if let Some(ref oid) = q.org_id { q_inner = q_inner.bind(oid); }
             if let Some(ref kid) = q.api_key_id { q_inner = q_inner.bind(kid); }
             if let Some(ref mp) = model_pattern { q_inner = q_inner.bind(mp); }
@@ -1109,7 +1149,8 @@ async fn get_stats(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // 按组织（使用 r. 前缀，因为有 JOIN）
-    let org_extra = extra_where.replace("org_id", "r.org_id")
+    let org_extra = extra_where.replace("created_at", "r.created_at")
+        .replace("org_id", "r.org_id")
         .replace("api_key_id", "r.api_key_id")
         .replace("model", "r.model");
     let org_sql = format!(

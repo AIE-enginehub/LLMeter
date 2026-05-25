@@ -55,7 +55,10 @@ pub struct ModelConfig {
 /// 初始化 PostgreSQL 连接池
 pub async fn init_pool(database_url: &str) -> PgPool {
     PgPoolOptions::new()
-        .max_connections(20)
+        .max_connections(50)
+        .min_connections(5)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .idle_timeout(std::time::Duration::from_secs(300))
         .connect(database_url)
         .await
         .expect("无法连接数据库")
@@ -235,7 +238,7 @@ pub async fn find_first_model_config(pool: &PgPool, org_id: Uuid, protocol: &str
         "SELECT id, org_id, name, protocol, model_patterns, base_url, \
                 real_api_key, priority, is_active, created_at, updated_at \
          FROM model_configs WHERE org_id = $1 AND is_active = true AND protocol = $2 \
-         ORDER BY priority DESC LIMIT 1"
+         ORDER BY priority ASC LIMIT 1"
     )
     .bind(org_id)
     .bind(protocol)
@@ -244,30 +247,29 @@ pub async fn find_first_model_config(pool: &PgPool, org_id: Uuid, protocol: &str
     .ok()?
 }
 
-/// 根据组织 ID 和模型名称匹配配置（按优先级降序，取最高优先级的匹配项）
-pub async fn find_model_config(
+/// 根据组织 ID 和模型名称匹配所有配置（按优先级降序），用于失败重试
+pub async fn find_all_model_configs(
     pool: &PgPool,
     org_id: Uuid,
     model: &str,
-) -> Option<ModelConfig> {
+) -> Vec<ModelConfig> {
     let configs = sqlx::query_as::<_, ModelConfig>(
         r#"
         SELECT id, org_id, name, protocol, model_patterns, base_url,
                real_api_key, priority, is_active, created_at, updated_at
         FROM model_configs
         WHERE org_id = $1 AND is_active = true
-        ORDER BY priority DESC
+        ORDER BY priority ASC
         "#,
     )
     .bind(org_id)
     .fetch_all(pool)
     .await
-    .ok()?;
+    .unwrap_or_default();
 
-    configs.into_iter().find(|cfg| {
+    configs.into_iter().filter(|cfg| {
         let patterns = cfg.model_patterns.trim();
         if patterns.is_empty() {
-            // model_patterns 为空时，用配置名称做前缀匹配
             model.starts_with(cfg.name.trim())
         } else {
             patterns
@@ -276,6 +278,8 @@ pub async fn find_model_config(
                 .filter(|p| !p.is_empty())
                 .any(|pattern| glob_match::glob_match(pattern, model))
         }
-    })
+    }).collect()
 }
+
+
 

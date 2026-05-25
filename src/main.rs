@@ -27,9 +27,18 @@ async fn main() {
     db::run_migrations(&pool).await;
     ensure_admin_user(&pool, &admin_password).await;
 
+    let http_client = reqwest::Client::builder()
+        .pool_max_idle_per_host(50)
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .tcp_nodelay(true)
+        .tcp_keepalive(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .expect("Failed to build HTTP client");
+
     let state = Arc::new(AppState {
         pool,
-        http_client: reqwest::Client::new(),
+        http_client,
         jwt_secret,
     });
 

@@ -3,6 +3,7 @@
  */
 function logsTab() {
   return {
+    ...dateRangePicker(),
     loading: false,
     logs: [],
     orgs: [],
@@ -10,9 +11,21 @@ function logsTab() {
     total: 0,
     page: 1,
     pageSize: 20,
-    filter: { org_id: '', api_key_id: '', model: '', status: '' },
+    filter: { org_id: '', api_key_id: '', model: '', status: '', start_time: '', end_time: '' },
     logDetail: null,
     modelSearchTimer: null,
+
+    selectStartDate(cell) {
+      const val = this._drp_select(cell);
+      if (val) { this.filter.start_time = val; this._drp_showPanel = ''; this.page = 1; this.load(); }
+    },
+    selectEndDate(cell) {
+      const val = this._drp_select(cell);
+      if (val) { this.filter.end_time = val; this._drp_showPanel = ''; this.page = 1; this.load(); }
+    },
+    clearDateRange() {
+      this.filter.start_time = ''; this.filter.end_time = ''; this.page = 1; this.load();
+    },
 
     get totalPages() { return Math.max(1, Math.ceil(this.total / this.pageSize)); },
 
@@ -27,6 +40,8 @@ function logsTab() {
         if (this.filter.api_key_id) url += `&api_key_id=${this.filter.api_key_id}`;
         if (this.filter.model) url += `&model=${encodeURIComponent(this.filter.model)}`;
         if (this.filter.status) url += `&status=${this.filter.status}`;
+        if (this.filter.start_time) url += `&start_time=${encodeURIComponent(this.filter.start_time.replace('T', ' '))}`;
+        if (this.filter.end_time) url += `&end_time=${encodeURIComponent(this.filter.end_time.replace('T', ' '))}`;
         const res = await api(url);
         this.logs = res.data;
         this.total = res.total;

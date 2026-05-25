@@ -17,6 +17,19 @@ use crate::protocol::{self, Protocol, TokenUsage};
 use crate::state::AppState;
 use crate::static_files;
 
+/// 日志写入所需的请求元数据，从关键路径传递到后台任务
+struct LogMeta {
+    id: Uuid,
+    org_id: Uuid,
+    api_key_id: Uuid,
+    provider: String,
+    model: Option<String>,
+    path: String,
+    method: String,
+    is_stream: bool,
+    request_body: Option<Value>,
+}
+
 /// 从请求头中提取 API Key（支持 Bearer、x-api-key、x-goog-api-key）
 fn extract_api_key(headers: &http::HeaderMap) -> Option<String> {
     if let Some(auth) = headers.get(http::header::AUTHORIZATION) {
@@ -128,108 +141,150 @@ pub async fn proxy_handler(
         Protocol::Anthropic => "anthropic",
         Protocol::Gemini => "gemini",
     };
-    let model_config = match &model_name {
-        Some(name) => crate::db::find_model_config(&state.pool, org.id, name)
-            .await
-            .ok_or((StatusCode::NOT_FOUND, format!("No config found for model '{name}'")))?,
-        None => crate::db::find_first_model_config(&state.pool, org.id, protocol_str)
-            .await
-            .ok_or((StatusCode::BAD_REQUEST, format!("No available {protocol_str} model config for this organization")))?,
-    };
-
-    // 配置中的 protocol 字段优先
-    let actual_protocol = match model_config.protocol.as_str() {
-        "anthropic" => Protocol::Anthropic,
-        "gemini" => Protocol::Gemini,
-        _ => detected_protocol,
-    };
-
-    // 6. 判断流式
-    let is_stream = protocol::is_streaming(actual_protocol, body_ref, &path);
-
-    // 为 OpenAI 流式请求自动注入 stream_options 以获取 usage 数据
-    let forwarded_body = if is_stream && actual_protocol == Protocol::OpenAI {
-        if let Some(mut json) = body_json.clone() {
-            if let Some(obj) = json.as_object_mut() {
-                obj.entry("stream_options").or_insert_with(|| {
-                    serde_json::json!({"include_usage": true})
-                });
+    let model_configs = match &model_name {
+        Some(name) => {
+            let cfgs = crate::db::find_all_model_configs(&state.pool, org.id, name).await;
+            if cfgs.is_empty() {
+                return Err((StatusCode::NOT_FOUND, format!("No config found for model '{name}'")));
             }
-            Bytes::from(serde_json::to_vec(&json).unwrap_or_else(|_| body_bytes.to_vec()))
+            cfgs
+        }
+        None => {
+            let cfg = crate::db::find_first_model_config(&state.pool, org.id, protocol_str)
+                .await
+                .ok_or((StatusCode::BAD_REQUEST, format!("No available {protocol_str} model config for this organization")))?;
+            vec![cfg]
+        }
+    };
+
+    // 6. 按优先级依次尝试每个配置，失败后降级到下一个
+    let mut last_error: Option<(StatusCode, String)> = None;
+
+    for (attempt, model_config) in model_configs.iter().enumerate() {
+        let actual_protocol = match model_config.protocol.as_str() {
+            "anthropic" => Protocol::Anthropic,
+            "gemini" => Protocol::Gemini,
+            _ => detected_protocol,
+        };
+        let is_stream = protocol::is_streaming(actual_protocol, body_ref, &path);
+
+        // 为 OpenAI 流式请求自动注入 stream_options 以获取 usage 数据
+        let forwarded_body = if is_stream && actual_protocol == Protocol::OpenAI {
+            if let Some(mut json) = body_json.clone() {
+                if let Some(obj) = json.as_object_mut() {
+                    obj.entry("stream_options").or_insert_with(|| {
+                        serde_json::json!({"include_usage": true})
+                    });
+                }
+                Bytes::from(serde_json::to_vec(&json).unwrap_or_else(|_| body_bytes.to_vec()))
+            } else {
+                body_bytes.clone()
+            }
         } else {
             body_bytes.clone()
+        };
+
+        let forwarded_headers =
+            protocol::transform_headers(actual_protocol, &parts.headers, &model_config.real_api_key);
+
+        // 构造目标 URL
+        let base_url = model_config.base_url.trim_end_matches('/');
+        let target_url = if is_passthrough {
+            let origin = base_url.find("://")
+                .and_then(|i| base_url[i + 3..].find('/').map(|j| &base_url[..i + 3 + j]))
+                .unwrap_or(base_url);
+            if query.is_empty() { format!("{origin}{path}") } else { format!("{origin}{path}?{query}") }
+        } else {
+            let stripped_path = strip_protocol_prefix(&path, actual_protocol);
+            if query.is_empty() { format!("{base_url}{stripped_path}") } else { format!("{base_url}{stripped_path}?{query}") }
+        };
+
+        tracing::info!("Proxy: {} {} -> {} (config: {}, attempt: {})", method, path, target_url, model_config.name, attempt + 1);
+
+        // 发送请求
+        let upstream_result = state
+            .http_client
+            .request(method.clone(), &target_url)
+            .headers(forwarded_headers)
+            .body(forwarded_body)
+            .send()
+            .await;
+
+        let upstream_resp = match upstream_result {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("Upstream request failed via '{}': {e}, trying next config...", model_config.name);
+                // 记录失败日志
+                let fail_id = Uuid::new_v4();
+                let _ = sqlx::query(
+                    "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, request_body, status, error_message, duration_ms, updated_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'error', $10, $11, now())"
+                )
+                .bind(fail_id).bind(org.id).bind(api_key_record.id)
+                .bind(&model_config.name).bind(model_name.as_deref()).bind(&path).bind(method.to_string())
+                .bind(is_stream).bind(body_json.as_ref())
+                .bind(format!("Upstream unreachable: {e}"))
+                .bind(start.elapsed().as_millis() as i32)
+                .execute(&state.pool).await;
+                last_error = Some((StatusCode::BAD_GATEWAY, format!("Upstream unreachable: {e}")));
+                continue;
+            }
+        };
+
+        let resp_status = upstream_resp.status();
+
+        // 流式请求不重试（已开始向客户端推流，无法回退）
+        // 非流式且上游返回错误时，如果还有下一个配置可用，记录失败并重试
+        if !is_stream && !resp_status.is_success() && attempt + 1 < model_configs.len() {
+            let err_bytes = upstream_resp.bytes().await.unwrap_or_default();
+            let err_body: Option<Value> = serde_json::from_slice(&err_bytes).ok();
+            let err_msg = err_body.as_ref()
+                .and_then(|j| j.get("error")).and_then(|e| e.get("message")).and_then(|m| m.as_str())
+                .unwrap_or("Unknown upstream error")
+                .to_string();
+            tracing::warn!("Upstream '{}' returned {} ({}), trying next config...", model_config.name, resp_status.as_u16(), err_msg);
+
+            let fail_id = Uuid::new_v4();
+            let _ = sqlx::query(
+                "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, request_body, status, error_message, response_status, response_body, duration_ms, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'error', $10, $11, $12, $13, now())"
+            )
+            .bind(fail_id).bind(org.id).bind(api_key_record.id)
+            .bind(&model_config.name).bind(model_name.as_deref()).bind(&path).bind(method.to_string())
+            .bind(is_stream).bind(body_json.as_ref())
+            .bind(&err_msg)
+            .bind(resp_status.as_u16() as i32)
+            .bind(err_body)
+            .bind(start.elapsed().as_millis() as i32)
+            .execute(&state.pool).await;
+
+            last_error = Some((StatusCode::from_u16(resp_status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY), err_msg));
+            continue;
         }
-    } else {
-        body_bytes.clone()
-    };
 
-    // 7. 转换请求头（透传请求保留原始 content-type 等头信息）
-    let forwarded_headers =
-        protocol::transform_headers(actual_protocol, &parts.headers, &model_config.real_api_key);
+        // 成功或最后一个配置，正常处理
+        let log_id = Uuid::new_v4();
+        let log_meta = LogMeta {
+            id: log_id,
+            org_id: org.id,
+            api_key_id: api_key_record.id,
+            provider: model_config.name.clone(),
+            model: model_name.clone(),
+            path: path.clone(),
+            method: method.to_string(),
+            is_stream,
+            request_body: body_json.clone(),
+        };
 
-    // 8. 构造目标 URL
-    let base_url = model_config.base_url.trim_end_matches('/');
-    let target_url = if is_passthrough {
-        // 透传请求：提取 base_url 的 origin（scheme + host），直接拼接原始路径
-        // 无论 base_url 是 "https://api.openai.com/v1" 还是 "https://api.openai.com"
-        // 都统一取 "https://api.openai.com" + "/v1/files" = "https://api.openai.com/v1/files"
-        let origin = base_url.find("://")
-            .and_then(|i| base_url[i + 3..].find('/').map(|j| &base_url[..i + 3 + j]))
-            .unwrap_or(base_url);
-        if query.is_empty() { format!("{origin}{path}") } else { format!("{origin}{path}?{query}") }
-    } else {
-        let stripped_path = strip_protocol_prefix(&path, actual_protocol);
-        if query.is_empty() { format!("{base_url}{stripped_path}") } else { format!("{base_url}{stripped_path}?{query}") }
-    };
-    tracing::info!("Proxy: {} {} -> {}", method, path, target_url);
-    // 9. 转发请求
-    let upstream_resp = state
-        .http_client
-        .request(method.clone(), &target_url)
-        .headers(forwarded_headers)
-        .body(forwarded_body)
-        .send()
-        .await
-        .map_err(|e| {
-            tracing::error!("Upstream request failed: {e}");
-            (StatusCode::BAD_GATEWAY, format!("Upstream unreachable: {e}"))
-        })?;
-
-    let resp_status = upstream_resp.status();
-
-    // 10. 准备创建请求日志的数据
-    let log_org_id = org.id;
-    let log_key_id = api_key_record.id;
-    let log_provider = model_config.name.clone();
-    let log_model = model_name.clone();
-    let log_path = path.clone();
-    let log_method = method.to_string();
-    let log_body = body_json.clone();
-    let log_id = Uuid::new_v4();
-
-    // 10. 创建请求日志 (等待执行完成以避免与后续的 UPDATE 产生竞态条件)
-    let _ = sqlx::query(
-        "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, request_body, status) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')"
-    )
-    .bind(log_id)
-    .bind(log_org_id)
-    .bind(log_key_id)
-    .bind(&log_provider)
-    .bind(log_model.as_deref())
-    .bind(&log_path)
-    .bind(&log_method)
-    .bind(is_stream)
-    .bind(log_body.as_ref())
-    .execute(&state.pool)
-    .await;
-
-    // 11. 处理响应
-    if is_stream {
-        handle_streaming_response(state.pool.clone(), log_id, log_org_id, actual_protocol, upstream_resp, resp_status, start, is_passthrough).await
-    } else {
-        handle_normal_response(state.pool.clone(), log_id, log_org_id, actual_protocol, upstream_resp, resp_status, start, is_passthrough).await
+        if is_stream {
+            return handle_streaming_response(state.pool.clone(), log_meta, actual_protocol, upstream_resp, resp_status, start, is_passthrough).await;
+        } else {
+            return handle_normal_response(state.pool.clone(), log_meta, actual_protocol, upstream_resp, resp_status, start, is_passthrough).await;
+        }
     }
+
+    // 所有配置都失败
+    Err(last_error.unwrap_or((StatusCode::BAD_GATEWAY, "All upstream configs failed".to_string())))
 }
 
 /// 去掉请求路径中的协议前缀，避免与 base_url 中的路径重复
@@ -256,8 +311,7 @@ fn strip_protocol_prefix(path: &str, protocol: Protocol) -> String {
 /// 处理非流式响应
 async fn handle_normal_response(
     pool: sqlx::PgPool,
-    log_id: Uuid,
-    org_id: Uuid,
+    meta: LogMeta,
     protocol: Protocol,
     upstream_resp: reqwest::Response,
     status: reqwest::StatusCode,
@@ -286,7 +340,10 @@ async fn handle_normal_response(
     let duration_ms = start.elapsed().as_millis() as i32;
     let status_code = status.as_u16();
 
+    // 后台一次性写入完整日志（不阻塞响应返回）
     tokio::spawn(async move {
+        let log_id = meta.id;
+        let org_id = meta.org_id;
         let status_str = if (200..300).contains(&status_code) { "success" } else { "error" };
         let error_msg = if status_str == "error" {
             resp_json.as_ref().and_then(|j| j.get("error")).and_then(|e| e.get("message")).and_then(|m| m.as_str()).map(String::from)
@@ -294,26 +351,24 @@ async fn handle_normal_response(
             None
         };
 
-        let update_res = sqlx::query(
-            "UPDATE request_logs SET response_status=$2, status=$3, prompt_tokens=$4, \
-             completion_tokens=$5, cached_tokens=$6, total_tokens=$7, duration_ms=$8, \
-             error_message=$9, response_body=$10, updated_at=now() WHERE id=$1"
+        let insert_res = sqlx::query(
+            "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, \
+             request_body, response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
+             total_tokens, duration_ms, error_message, response_body, updated_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now())"
         )
-        .bind(log_id)
-        .bind(status_code as i32)
-        .bind(status_str)
-        .bind(usage.prompt_tokens)
-        .bind(usage.completion_tokens)
-        .bind(usage.cached_tokens)
-        .bind(usage.total_tokens)
-        .bind(duration_ms)
-        .bind(error_msg.clone())
-        .bind(resp_json.clone())
+        .bind(log_id).bind(meta.org_id).bind(meta.api_key_id)
+        .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
+        .bind(meta.is_stream).bind(meta.request_body.as_ref())
+        .bind(status_code as i32).bind(status_str)
+        .bind(usage.prompt_tokens).bind(usage.completion_tokens)
+        .bind(usage.cached_tokens).bind(usage.total_tokens)
+        .bind(duration_ms).bind(error_msg.clone()).bind(resp_json.clone())
         .execute(&pool)
         .await;
 
-        if let Err(e) = &update_res {
-            tracing::error!("Failed to update request_log: {}", e);
+        if let Err(e) = &insert_res {
+            tracing::error!("Failed to insert request_log: {}", e);
         }
 
         // 透传请求不扣积分
@@ -386,8 +441,7 @@ async fn handle_normal_response(
 /// 处理流式 SSE 响应
 async fn handle_streaming_response(
     pool: sqlx::PgPool,
-    log_id: Uuid,
-    org_id: Uuid,
+    meta: LogMeta,
     proto: Protocol,
     upstream_resp: reqwest::Response,
     status: reqwest::StatusCode,
@@ -399,6 +453,7 @@ async fn handle_streaming_response(
 
     let pool_clone = pool.clone();
     let status_code = status.as_u16();
+    let log_id = meta.id;
     let (usage_tx, usage_rx) = tokio::sync::oneshot::channel::<(TokenUsage, i32, String)>();
 
     // line_buf 用于缓冲跨 chunk 的不完整 SSE 行，确保 usage 提取不会因行被截断而丢失
@@ -441,21 +496,24 @@ async fn handle_streaming_response(
         },
     );
 
-    // 异步等待流结束并更新日志
+    // 异步等待流结束并写入日志
     tokio::spawn(async move {
+        let org_id = meta.org_id;
+
         let (usage, duration_ms, body_str) = match usage_rx.await {
             Ok(v) => v,
             Err(_) => {
-                // 流被中断（客户端断开等），tx 被 drop 导致 rx 收到 Err
                 tracing::warn!("Stream channel closed without sending usage for log {log_id}, marking as error");
                 let duration_ms = start.elapsed().as_millis() as i32;
                 let _ = sqlx::query(
-                    "UPDATE request_logs SET response_status=$2, status='error', duration_ms=$3, \
-                     error_message='Stream interrupted (client disconnected or upstream error)', updated_at=now() WHERE id=$1"
+                    "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, \
+                     request_body, response_status, status, duration_ms, error_message, updated_at) \
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'error',$11,'Stream interrupted',$12)"
                 )
-                .bind(log_id)
-                .bind(status_code as i32)
-                .bind(duration_ms)
+                .bind(log_id).bind(meta.org_id).bind(meta.api_key_id)
+                .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
+                .bind(meta.is_stream).bind(meta.request_body.as_ref())
+                .bind(status_code as i32).bind(duration_ms).bind(chrono::Utc::now())
                 .execute(&pool_clone)
                 .await;
                 return;
@@ -470,26 +528,24 @@ async fn handle_streaming_response(
         };
         let resp_json = Value::String(body_str);
 
-        let update_res = sqlx::query(
-            "UPDATE request_logs SET response_status=$2, status=$3, prompt_tokens=$4, \
-             completion_tokens=$5, cached_tokens=$6, total_tokens=$7, duration_ms=$8, \
-             response_body=$9, error_message=$10, updated_at=now() WHERE id=$1"
+        let insert_res = sqlx::query(
+            "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, \
+             request_body, response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
+             total_tokens, duration_ms, error_message, response_body, updated_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now())"
         )
-        .bind(log_id)
-        .bind(status_code as i32)
-        .bind(status_str)
-        .bind(usage.prompt_tokens)
-        .bind(usage.completion_tokens)
-        .bind(usage.cached_tokens)
-        .bind(usage.total_tokens)
-        .bind(duration_ms)
-        .bind(resp_json.clone())
-        .bind(error_msg)
+        .bind(log_id).bind(meta.org_id).bind(meta.api_key_id)
+        .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
+        .bind(meta.is_stream).bind(meta.request_body.as_ref())
+        .bind(status_code as i32).bind(status_str)
+        .bind(usage.prompt_tokens).bind(usage.completion_tokens)
+        .bind(usage.cached_tokens).bind(usage.total_tokens)
+        .bind(duration_ms).bind(error_msg).bind(resp_json.clone())
         .execute(&pool_clone)
         .await;
 
-        if let Err(e) = &update_res {
-            tracing::error!("Failed to update request_log (stream): {}", e);
+        if let Err(e) = &insert_res {
+            tracing::error!("Failed to insert request_log (stream): {}", e);
         }
 
         // 透传请求不扣积分

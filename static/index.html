@@ -647,6 +647,34 @@
                 class="pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition w-48"
                 :placeholder="t('model_search_ph')">
             </div>
+            <!-- 时间范围 -->
+            <div class="flex items-center gap-1.5 relative">
+              <button @click="_drp_open('logStart', filter.start_time)" class="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs hover:bg-slate-100 transition min-w-[100px] text-left" x-text="_drp_fmtDisplay(filter.start_time)"></button>
+              <span class="text-slate-400 text-xs">-</span>
+              <button @click="_drp_open('logEnd', filter.end_time)" class="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs hover:bg-slate-100 transition min-w-[100px] text-left" x-text="_drp_fmtDisplay(filter.end_time)"></button>
+              <button x-show="filter.start_time || filter.end_time" @click="clearDateRange()" class="text-slate-400 hover:text-red-400 transition">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+              <!-- 日历面板 -->
+              <div x-show="_drp_showPanel === 'logStart' || _drp_showPanel === 'logEnd'" @click.away="_drp_showPanel = ''"
+                class="absolute top-full left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg p-3 z-50 w-64">
+                <div class="flex items-center justify-between mb-2">
+                  <button @click="_drp_prevMonth()" class="p-1 hover:bg-slate-100 rounded text-slate-500"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg></button>
+                  <span class="text-sm font-medium text-slate-700" x-text="_drp_monthLabel"></span>
+                  <button @click="_drp_nextMonth()" class="p-1 hover:bg-slate-100 rounded text-slate-500"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg></button>
+                </div>
+                <div class="grid grid-cols-7 gap-0.5 text-center text-[10px] text-slate-400 mb-1">
+                  <template x-for="wd in _drp_weekDays"><span x-text="wd"></span></template>
+                </div>
+                <div class="grid grid-cols-7 gap-0.5 text-center">
+                  <template x-for="(cell, ci) in _drp_days" :key="ci">
+                    <button @click="_drp_showPanel === 'logStart' ? selectStartDate(cell) : selectEndDate(cell)"
+                      :class="[cell.cur ? 'text-slate-700 hover:bg-indigo-50 hover:text-indigo-600' : 'text-slate-300 pointer-events-none', _drp_isToday(cell) && 'bg-indigo-500 text-white hover:bg-indigo-600 hover:text-white rounded-full']"
+                      class="w-8 h-8 text-xs rounded-full transition" x-text="cell.d"></button>
+                  </template>
+                </div>
+              </div>
+            </div>
             <div class="flex-1"></div>
             <span class="text-xs text-slate-400" x-show="total > 0" x-text="t('total_records', total)"></span>
             <button @click="load()" :disabled="loading" class="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition disabled:opacity-40" :title="t('refresh')">
@@ -802,14 +830,43 @@
                   class="px-3 py-1 text-xs rounded-md font-medium transition-all" x-text="t('perspective_credit')">
                 </button>
               </div>
-              <!-- 天数切换 -->
+              <!-- 天数切换 + 自定义 -->
               <div class="flex bg-white border border-slate-200 rounded-lg p-0.5">
                 <template x-for="d in [7, 14, 30]" :key="d">
-                  <button @click="days = d; load()"
-                    :class="days === d ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+                  <button @click="useCustomRange = false; days = d; load()"
+                    :class="!useCustomRange && days === d ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'"
                     class="px-3 py-1 text-xs rounded-md font-medium transition-all" x-text="t('days', d)">
                   </button>
                 </template>
+                <button @click="useCustomRange = true"
+                  :class="useCustomRange ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+                  class="px-3 py-1 text-xs rounded-md font-medium transition-all" x-text="t('custom_range')">
+                </button>
+              </div>
+              <!-- 自定义时间范围 -->
+              <div x-show="useCustomRange" class="flex items-center gap-1.5 relative">
+                <button @click="_drp_open('usageStart', customRange.start)" class="px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs hover:bg-slate-100 transition min-w-[100px] text-left" x-text="_drp_fmtDisplay(customRange.start)"></button>
+                <span class="text-slate-400 text-xs">-</span>
+                <button @click="_drp_open('usageEnd', customRange.end)" class="px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs hover:bg-slate-100 transition min-w-[100px] text-left" x-text="_drp_fmtDisplay(customRange.end)"></button>
+                <!-- 日历面板 -->
+                <div x-show="_drp_showPanel === 'usageStart' || _drp_showPanel === 'usageEnd'" @click.away="_drp_showPanel = ''"
+                  class="absolute top-full left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg p-3 z-50 w-64">
+                  <div class="flex items-center justify-between mb-2">
+                    <button @click="_drp_prevMonth()" class="p-1 hover:bg-slate-100 rounded text-slate-500"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg></button>
+                    <span class="text-sm font-medium text-slate-700" x-text="_drp_monthLabel"></span>
+                    <button @click="_drp_nextMonth()" class="p-1 hover:bg-slate-100 rounded text-slate-500"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg></button>
+                  </div>
+                  <div class="grid grid-cols-7 gap-0.5 text-center text-[10px] text-slate-400 mb-1">
+                    <template x-for="wd in _drp_weekDays"><span x-text="wd"></span></template>
+                  </div>
+                  <div class="grid grid-cols-7 gap-0.5 text-center">
+                    <template x-for="(cell, ci) in _drp_days" :key="ci">
+                      <button @click="_drp_showPanel === 'usageStart' ? selectCustomStart(cell) : selectCustomEnd(cell)"
+                        :class="[cell.cur ? 'text-slate-700 hover:bg-indigo-50 hover:text-indigo-600' : 'text-slate-300 pointer-events-none', _drp_isToday(cell) && 'bg-indigo-500 text-white hover:bg-indigo-600 hover:text-white rounded-full']"
+                        class="w-8 h-8 text-xs rounded-full transition" x-text="cell.d"></button>
+                    </template>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
