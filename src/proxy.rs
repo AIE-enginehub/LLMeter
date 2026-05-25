@@ -338,15 +338,34 @@ async fn handle_normal_response(
                     cost += (ca as f64) / rates.cached_rate;
                 }
             }
+            // 长上下文倍率：输入 Token >= 阈值时，积分乘以倍率
+            let mut is_long_context = false;
+            if let (Some(threshold), Some(multiplier)) = (rates.long_context_threshold, rates.long_context_multiplier) {
+                if threshold > 0 && multiplier > 0.0 {
+                    if let Some(p) = usage.prompt_tokens {
+                        if (p as u64) >= threshold {
+                            cost *= multiplier;
+                            is_long_context = true;
+                        }
+                    }
+                }
+            }
             if cost > 0.0 {
                 if let Some(decimal_cost) = rust_decimal::Decimal::from_f64(cost) {
                     let _ = crate::db::deduct_credit(&pool, org_id, decimal_cost, &log_id.to_string()).await;
-                    let _ = sqlx::query("UPDATE request_logs SET credit_cost = $1 WHERE id = $2")
+                    let _ = sqlx::query("UPDATE request_logs SET credit_cost = $1, is_long_context = $3 WHERE id = $2")
                         .bind(decimal_cost)
                         .bind(log_id)
+                        .bind(is_long_context)
                         .execute(&pool)
                         .await;
                 }
+            } else if is_long_context {
+                let _ = sqlx::query("UPDATE request_logs SET is_long_context = $2 WHERE id = $1")
+                    .bind(log_id)
+                    .bind(true)
+                    .execute(&pool)
+                    .await;
             }
         }
     });
@@ -424,63 +443,105 @@ async fn handle_streaming_response(
 
     // 异步等待流结束并更新日志
     tokio::spawn(async move {
-        if let Ok((usage, duration_ms, body_str)) = usage_rx.await {
-            let status_str = if (200..300).contains(&status_code) { "success" } else { "error" };
-            let resp_json = Value::String(body_str);
-            
-            let update_res = sqlx::query(
-                "UPDATE request_logs SET response_status=$2, status=$3, prompt_tokens=$4, \
-                 completion_tokens=$5, cached_tokens=$6, total_tokens=$7, duration_ms=$8, \
-                 response_body=$9, updated_at=now() WHERE id=$1"
-            )
-            .bind(log_id)
-            .bind(status_code as i32)
-            .bind(status_str)
-            .bind(usage.prompt_tokens)
-            .bind(usage.completion_tokens)
-            .bind(usage.cached_tokens)
-            .bind(usage.total_tokens)
-            .bind(duration_ms)
-            .bind(resp_json.clone())
-            .execute(&pool_clone)
-            .await;
-
-            if let Err(e) = &update_res {
-                tracing::error!("Failed to update request_log (stream): {}", e);
+        let (usage, duration_ms, body_str) = match usage_rx.await {
+            Ok(v) => v,
+            Err(_) => {
+                // 流被中断（客户端断开等），tx 被 drop 导致 rx 收到 Err
+                tracing::warn!("Stream channel closed without sending usage for log {log_id}, marking as error");
+                let duration_ms = start.elapsed().as_millis() as i32;
+                let _ = sqlx::query(
+                    "UPDATE request_logs SET response_status=$2, status='error', duration_ms=$3, \
+                     error_message='Stream interrupted (client disconnected or upstream error)', updated_at=now() WHERE id=$1"
+                )
+                .bind(log_id)
+                .bind(status_code as i32)
+                .bind(duration_ms)
+                .execute(&pool_clone)
+                .await;
+                return;
             }
+        };
 
-            // 透传请求不扣积分
-            if is_passthrough { return; }
+        let status_str = if (200..300).contains(&status_code) { "success" } else { "error" };
+        let error_msg = if status_str == "error" {
+            Some(body_str.chars().take(500).collect::<String>())
+        } else {
+            None
+        };
+        let resp_json = Value::String(body_str);
 
-            // 扣除积分
-            if status_str == "success" {
-                let rates = crate::db::get_credit_rates(&pool_clone).await;
-                let mut cost = 0.0;
-                if let Some(p) = usage.prompt_tokens {
-                    if rates.input_rate > 0.0 {
-                        cost += (p as f64) / rates.input_rate;
+        let update_res = sqlx::query(
+            "UPDATE request_logs SET response_status=$2, status=$3, prompt_tokens=$4, \
+             completion_tokens=$5, cached_tokens=$6, total_tokens=$7, duration_ms=$8, \
+             response_body=$9, error_message=$10, updated_at=now() WHERE id=$1"
+        )
+        .bind(log_id)
+        .bind(status_code as i32)
+        .bind(status_str)
+        .bind(usage.prompt_tokens)
+        .bind(usage.completion_tokens)
+        .bind(usage.cached_tokens)
+        .bind(usage.total_tokens)
+        .bind(duration_ms)
+        .bind(resp_json.clone())
+        .bind(error_msg)
+        .execute(&pool_clone)
+        .await;
+
+        if let Err(e) = &update_res {
+            tracing::error!("Failed to update request_log (stream): {}", e);
+        }
+
+        // 透传请求不扣积分
+        if is_passthrough { return; }
+
+        // 扣除积分
+        if status_str == "success" {
+            let rates = crate::db::get_credit_rates(&pool_clone).await;
+            let mut cost = 0.0;
+            if let Some(p) = usage.prompt_tokens {
+                if rates.input_rate > 0.0 {
+                    cost += (p as f64) / rates.input_rate;
+                }
+            }
+            if let Some(c) = usage.completion_tokens {
+                if rates.output_rate > 0.0 {
+                    cost += (c as f64) / rates.output_rate;
+                }
+            }
+            if let Some(ca) = usage.cached_tokens {
+                if rates.cached_rate > 0.0 {
+                    cost += (ca as f64) / rates.cached_rate;
+                }
+            }
+            // 长上下文倍率：输入 Token >= 阈值时，积分乘以倍率
+            let mut is_long_context = false;
+            if let (Some(threshold), Some(multiplier)) = (rates.long_context_threshold, rates.long_context_multiplier) {
+                if threshold > 0 && multiplier > 0.0 {
+                    if let Some(p) = usage.prompt_tokens {
+                        if (p as u64) >= threshold {
+                            cost *= multiplier;
+                            is_long_context = true;
+                        }
                     }
                 }
-                if let Some(c) = usage.completion_tokens {
-                    if rates.output_rate > 0.0 {
-                        cost += (c as f64) / rates.output_rate;
-                    }
+            }
+            if cost > 0.0 {
+                if let Some(decimal_cost) = rust_decimal::Decimal::from_f64(cost) {
+                    let _ = crate::db::deduct_credit(&pool_clone, org_id, decimal_cost, &log_id.to_string()).await;
+                    let _ = sqlx::query("UPDATE request_logs SET credit_cost = $1, is_long_context = $3 WHERE id = $2")
+                        .bind(decimal_cost)
+                        .bind(log_id)
+                        .bind(is_long_context)
+                        .execute(&pool_clone)
+                        .await;
                 }
-                if let Some(ca) = usage.cached_tokens {
-                    if rates.cached_rate > 0.0 {
-                        cost += (ca as f64) / rates.cached_rate;
-                    }
-                }
-                if cost > 0.0 {
-                    if let Some(decimal_cost) = rust_decimal::Decimal::from_f64(cost) {
-                        let _ = crate::db::deduct_credit(&pool_clone, org_id, decimal_cost, &log_id.to_string()).await;
-                        let _ = sqlx::query("UPDATE request_logs SET credit_cost = $1 WHERE id = $2")
-                            .bind(decimal_cost)
-                            .bind(log_id)
-                            .execute(&pool_clone)
-                            .await;
-                    }
-                }
+            } else if is_long_context {
+                let _ = sqlx::query("UPDATE request_logs SET is_long_context = $2 WHERE id = $1")
+                    .bind(log_id)
+                    .bind(true)
+                    .execute(&pool_clone)
+                    .await;
             }
         }
     });

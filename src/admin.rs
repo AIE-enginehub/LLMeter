@@ -177,6 +177,7 @@ struct LogRow {
     duration_ms: Option<i32>,
     error_message: Option<String>,
     credit_cost: Option<rust_decimal::Decimal>,
+    is_long_context: bool,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -201,6 +202,7 @@ struct LogSummaryRow {
     duration_ms: Option<i32>,
     error_message: Option<String>,
     credit_cost: Option<rust_decimal::Decimal>,
+    is_long_context: bool,
     created_at: DateTime<Utc>,
 }
 
@@ -773,7 +775,7 @@ async fn list_logs(
         "SELECT id, org_id, api_key_id, provider, model, path, method, is_stream, \
                 response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
                 (COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0) + COALESCE(cached_tokens, 0)) AS total_tokens, \
-                duration_ms, error_message, credit_cost, created_at \
+                duration_ms, error_message, credit_cost, is_long_context, created_at \
          FROM request_logs {where_clause} \
          ORDER BY created_at DESC \
          LIMIT ${param_idx} OFFSET ${}",
@@ -818,7 +820,7 @@ async fn get_log(
         "SELECT id, org_id, api_key_id, provider, model, path, method, is_stream, \
                 request_body, response_body, response_status, status, \
                 prompt_tokens, completion_tokens, cached_tokens, total_tokens, \
-                duration_ms, error_message, credit_cost, created_at, updated_at \
+                duration_ms, error_message, credit_cost, is_long_context, created_at, updated_at \
          FROM request_logs WHERE id = $1",
     )
     .bind(id)
@@ -988,6 +990,8 @@ struct CreditLogPage {
 struct StatsQuery {
     days: Option<i32>,
     org_id: Option<Uuid>,
+    api_key_id: Option<Uuid>,
+    model: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1048,7 +1052,7 @@ struct DailyStats {
     credit_cost: f64,
 }
 
-/// GET /api/stats — 统计数据
+/// GET /api/stats — 统计数据（支持组织/Key/模型筛选）
 async fn get_stats(
     State(state): State<Arc<AppState>>,
     _admin: AuthAdmin,
@@ -1057,11 +1061,34 @@ async fn get_stats(
     let days = q.days.unwrap_or(7).max(1);
     let since = Utc::now() - chrono::TimeDelta::days(days as i64);
 
-    let org_filter = if q.org_id.is_some() {
-        "AND org_id = $2"
-    } else {
-        ""
-    };
+    // 动态构建 WHERE 条件和参数
+    let mut extra_where = String::new();
+    let mut param_idx: u32 = 2; // $1 = since
+    if q.org_id.is_some() {
+        extra_where += &format!(" AND org_id = ${param_idx}");
+        param_idx += 1;
+    }
+    if q.api_key_id.is_some() {
+        extra_where += &format!(" AND api_key_id = ${param_idx}");
+        param_idx += 1;
+    }
+    if q.model.is_some() {
+        extra_where += &format!(" AND model ILIKE ${param_idx}");
+        // param_idx += 1; // 最后一个不需要再递增
+    }
+
+    let model_pattern = q.model.as_ref().map(|m| format!("%{m}%"));
+
+    /// 将动态筛选参数绑定到已有查询上
+    macro_rules! bind_filters {
+        ($query:expr) => {{
+            let mut q_inner = $query;
+            if let Some(ref oid) = q.org_id { q_inner = q_inner.bind(oid); }
+            if let Some(ref kid) = q.api_key_id { q_inner = q_inner.bind(kid); }
+            if let Some(ref mp) = model_pattern { q_inner = q_inner.bind(mp); }
+            q_inner
+        }};
+    }
 
     // 概览
     let overview_sql = format!(
@@ -1075,18 +1102,16 @@ async fn get_stats(
             (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) + COALESCE(SUM(cached_tokens), 0))::BIGINT AS total_tokens, \
             COALESCE(AVG(duration_ms)::FLOAT8, 0) AS avg_duration_ms, \
             COALESCE(SUM(credit_cost)::FLOAT8, 0) AS total_credit_cost \
-         FROM request_logs WHERE created_at >= $1 {org_filter}"
+         FROM request_logs WHERE created_at >= $1 {extra_where}"
     );
-    let mut overview_query = sqlx::query_as::<_, StatsOverview>(&overview_sql).bind(since);
-    if let Some(ref oid) = q.org_id {
-        overview_query = overview_query.bind(oid);
-    }
-    let overview = overview_query
-        .fetch_one(&state.pool)
-        .await
+    let overview = bind_filters!(sqlx::query_as::<_, StatsOverview>(&overview_sql).bind(since))
+        .fetch_one(&state.pool).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // 按组织
+    // 按组织（使用 r. 前缀，因为有 JOIN）
+    let org_extra = extra_where.replace("org_id", "r.org_id")
+        .replace("api_key_id", "r.api_key_id")
+        .replace("model", "r.model");
     let org_sql = format!(
         "SELECT r.org_id, COALESCE(o.name, 'unknown') AS org_name, \
             COUNT(*)::BIGINT AS request_count, \
@@ -1097,17 +1122,11 @@ async fn get_stats(
             COALESCE(SUM(r.credit_cost)::FLOAT8, 0) AS total_credit_cost, \
             COUNT(*) FILTER (WHERE r.status = 'error')::BIGINT AS error_count \
          FROM request_logs r LEFT JOIN organizations o ON r.org_id = o.id \
-         WHERE r.created_at >= $1 {} \
-         GROUP BY r.org_id, o.name ORDER BY request_count DESC",
-        if q.org_id.is_some() { "AND r.org_id = $2" } else { "" }
+         WHERE r.created_at >= $1 {org_extra} \
+         GROUP BY r.org_id, o.name ORDER BY request_count DESC"
     );
-    let mut oq = sqlx::query_as::<_, OrgStats>(&org_sql).bind(since);
-    if let Some(ref oid) = q.org_id {
-        oq = oq.bind(oid);
-    }
-    let by_org = oq
-        .fetch_all(&state.pool)
-        .await
+    let by_org = bind_filters!(sqlx::query_as::<_, OrgStats>(&org_sql).bind(since))
+        .fetch_all(&state.pool).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // 按 model
@@ -1120,16 +1139,11 @@ async fn get_stats(
             (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) + COALESCE(SUM(cached_tokens), 0))::BIGINT AS total_tokens, \
             COALESCE(AVG(duration_ms)::FLOAT8, 0) AS avg_duration_ms, \
             COALESCE(SUM(credit_cost)::FLOAT8, 0) AS total_credit_cost \
-         FROM request_logs WHERE created_at >= $1 {org_filter} \
+         FROM request_logs WHERE created_at >= $1 {extra_where} \
          GROUP BY model ORDER BY request_count DESC"
     );
-    let mut mq = sqlx::query_as::<_, ModelStats>(&model_sql).bind(since);
-    if let Some(ref oid) = q.org_id {
-        mq = mq.bind(oid);
-    }
-    let by_model = mq
-        .fetch_all(&state.pool)
-        .await
+    let by_model = bind_filters!(sqlx::query_as::<_, ModelStats>(&model_sql).bind(since))
+        .fetch_all(&state.pool).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // 每日趋势
@@ -1142,22 +1156,12 @@ async fn get_stats(
             (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) + COALESCE(SUM(cached_tokens), 0))::BIGINT AS total_tokens, \
             COUNT(*) FILTER (WHERE status = 'error')::BIGINT AS error_count, \
             COALESCE(SUM(credit_cost)::FLOAT8, 0) AS credit_cost \
-         FROM request_logs WHERE created_at >= $1 {org_filter} \
+         FROM request_logs WHERE created_at >= $1 {extra_where} \
          GROUP BY date ORDER BY date"
     );
-    let mut dq = sqlx::query_as::<_, DailyStats>(&daily_sql).bind(since);
-    if let Some(ref oid) = q.org_id {
-        dq = dq.bind(oid);
-    }
-    let daily_stats = dq
-        .fetch_all(&state.pool)
-        .await
+    let daily_stats = bind_filters!(sqlx::query_as::<_, DailyStats>(&daily_sql).bind(since))
+        .fetch_all(&state.pool).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(StatsResponse {
-        overview,
-        by_org,
-        by_model,
-        daily_stats,
-    }))
+    Ok(Json(StatsResponse { overview, by_org, by_model, daily_stats }))
 }

@@ -66,8 +66,9 @@ pub async fn run_migrations(pool: &PgPool) {
     let sql1 = include_str!("../migrations/001_init.sql");
     let sql2 = include_str!("../migrations/002_credit_system.sql");
     let sql3 = include_str!("../migrations/003_overdraft.sql");
+    let sql4 = include_str!("../migrations/004_long_context.sql");
 
-    for sql in [sql1, sql2, sql3] {
+    for sql in [sql1, sql2, sql3, sql4] {
         for statement in sql.split(';') {
             let meaningful: String = statement
                 .lines()
@@ -153,6 +154,12 @@ pub struct CreditRates {
     pub input_rate: f64,
     pub output_rate: f64,
     pub cached_rate: f64,
+    /// 长上下文阈值（输入 Token 数），为 None 或 0 时不启用
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_context_threshold: Option<u64>,
+    /// 长上下文积分倍率，输入 Token >= 阈值时 credit 乘以此值
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_context_multiplier: Option<f64>,
 }
 
 impl Default for CreditRates {
@@ -161,6 +168,8 @@ impl Default for CreditRates {
             input_rate: 1221.0,
             output_rate: 203.5,
             cached_rate: 12210.0,
+            long_context_threshold: None,
+            long_context_multiplier: None,
         }
     }
 }
