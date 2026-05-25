@@ -1089,13 +1089,16 @@ async fn get_stats(
     Query(q): Query<StatsQuery>,
 ) -> Result<Json<StatsResponse>, (StatusCode, Json<ErrorResponse>)> {
     // 时间范围：优先使用 start_time/end_time，否则按 days 计算
-    let parse_ts = |s: &str| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
+    let parse_start = |s: &str| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
         .or_else(|| chrono::NaiveDateTime::parse_from_str(&format!("{s} 00:00:00"), "%Y-%m-%d %H:%M:%S").ok())
         .map(|dt| dt.and_utc());
+    let parse_end = |s: &str| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
+        .or_else(|| chrono::NaiveDateTime::parse_from_str(&format!("{s} 23:59:59"), "%Y-%m-%d %H:%M:%S").ok())
+        .map(|dt| dt.and_utc());
 
-    let since = q.start_time.as_deref().and_then(parse_ts)
+    let since = q.start_time.as_deref().and_then(parse_start)
         .unwrap_or_else(|| Utc::now() - chrono::TimeDelta::days(q.days.unwrap_or(7).max(1) as i64));
-    let until: Option<DateTime<Utc>> = q.end_time.as_deref().and_then(parse_ts);
+    let until: Option<DateTime<Utc>> = q.end_time.as_deref().and_then(parse_end);
 
     // 动态构建 WHERE 条件和参数
     let mut extra_where = String::new();
