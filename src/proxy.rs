@@ -377,34 +377,38 @@ async fn handle_normal_response(
         // 扣除积分
         if status_str == "success" {
             let rates = crate::db::get_credit_rates(&pool).await;
+
+            // 判断是否触发长上下文：输入 Token >= 阈值且长上下文比例已配置
+            let is_long_context = rates.long_context_threshold
+                .filter(|&t| t > 0)
+                .and_then(|threshold| {
+                    usage.prompt_tokens.map(|p| (p as u64) >= threshold)
+                })
+                .unwrap_or(false)
+                && rates.long_context_input_rate.is_some();
+
+            // 根据是否长上下文选择对应的比例
+            let (ir, or, cr) = if is_long_context {
+                (
+                    rates.long_context_input_rate.unwrap_or(rates.input_rate),
+                    rates.long_context_output_rate.unwrap_or(rates.output_rate),
+                    rates.long_context_cached_rate.unwrap_or(rates.cached_rate),
+                )
+            } else {
+                (rates.input_rate, rates.output_rate, rates.cached_rate)
+            };
+
             let mut cost = 0.0;
             if let Some(p) = usage.prompt_tokens {
-                if rates.input_rate > 0.0 {
-                    cost += (p as f64) / rates.input_rate;
-                }
+                if ir > 0.0 { cost += (p as f64) / ir; }
             }
             if let Some(c) = usage.completion_tokens {
-                if rates.output_rate > 0.0 {
-                    cost += (c as f64) / rates.output_rate;
-                }
+                if or > 0.0 { cost += (c as f64) / or; }
             }
             if let Some(ca) = usage.cached_tokens {
-                if rates.cached_rate > 0.0 {
-                    cost += (ca as f64) / rates.cached_rate;
-                }
+                if cr > 0.0 { cost += (ca as f64) / cr; }
             }
-            // 长上下文倍率：输入 Token >= 阈值时，积分乘以倍率
-            let mut is_long_context = false;
-            if let (Some(threshold), Some(multiplier)) = (rates.long_context_threshold, rates.long_context_multiplier) {
-                if threshold > 0 && multiplier > 0.0 {
-                    if let Some(p) = usage.prompt_tokens {
-                        if (p as u64) >= threshold {
-                            cost *= multiplier;
-                            is_long_context = true;
-                        }
-                    }
-                }
-            }
+
             if cost > 0.0 {
                 if let Some(decimal_cost) = rust_decimal::Decimal::from_f64(cost) {
                     let _ = crate::db::deduct_credit(&pool, org_id, decimal_cost, &log_id.to_string()).await;
@@ -554,34 +558,38 @@ async fn handle_streaming_response(
         // 扣除积分
         if status_str == "success" {
             let rates = crate::db::get_credit_rates(&pool_clone).await;
+
+            // 判断是否触发长上下文：输入 Token >= 阈值且长上下文比例已配置
+            let is_long_context = rates.long_context_threshold
+                .filter(|&t| t > 0)
+                .and_then(|threshold| {
+                    usage.prompt_tokens.map(|p| (p as u64) >= threshold)
+                })
+                .unwrap_or(false)
+                && rates.long_context_input_rate.is_some();
+
+            // 根据是否长上下文选择对应的比例
+            let (ir, or, cr) = if is_long_context {
+                (
+                    rates.long_context_input_rate.unwrap_or(rates.input_rate),
+                    rates.long_context_output_rate.unwrap_or(rates.output_rate),
+                    rates.long_context_cached_rate.unwrap_or(rates.cached_rate),
+                )
+            } else {
+                (rates.input_rate, rates.output_rate, rates.cached_rate)
+            };
+
             let mut cost = 0.0;
             if let Some(p) = usage.prompt_tokens {
-                if rates.input_rate > 0.0 {
-                    cost += (p as f64) / rates.input_rate;
-                }
+                if ir > 0.0 { cost += (p as f64) / ir; }
             }
             if let Some(c) = usage.completion_tokens {
-                if rates.output_rate > 0.0 {
-                    cost += (c as f64) / rates.output_rate;
-                }
+                if or > 0.0 { cost += (c as f64) / or; }
             }
             if let Some(ca) = usage.cached_tokens {
-                if rates.cached_rate > 0.0 {
-                    cost += (ca as f64) / rates.cached_rate;
-                }
+                if cr > 0.0 { cost += (ca as f64) / cr; }
             }
-            // 长上下文倍率：输入 Token >= 阈值时，积分乘以倍率
-            let mut is_long_context = false;
-            if let (Some(threshold), Some(multiplier)) = (rates.long_context_threshold, rates.long_context_multiplier) {
-                if threshold > 0 && multiplier > 0.0 {
-                    if let Some(p) = usage.prompt_tokens {
-                        if (p as u64) >= threshold {
-                            cost *= multiplier;
-                            is_long_context = true;
-                        }
-                    }
-                }
-            }
+
             if cost > 0.0 {
                 if let Some(decimal_cost) = rust_decimal::Decimal::from_f64(cost) {
                     let _ = crate::db::deduct_credit(&pool_clone, org_id, decimal_cost, &log_id.to_string()).await;

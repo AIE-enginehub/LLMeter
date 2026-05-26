@@ -3,7 +3,7 @@
  */
 function settingsTab() {
   return {
-    rates: { input_rate: 1221, output_rate: 203.5, cached_rate: 12210, long_context_threshold: null, long_context_multiplier: null },
+    rates: { input_rate: 1221, output_rate: 203.5, cached_rate: 12210, long_context_threshold: null, long_context_input_rate: null, long_context_output_rate: null, long_context_cached_rate: null },
     pwdForm: { old_password: '', new_password: '', confirm_password: '' },
     showOldPwd: false,
     showNewPwd: false,
@@ -18,9 +18,11 @@ function settingsTab() {
     async save() {
       try {
         const payload = { ...this.rates };
-        // 阈值和倍率为 0 或空时视为未配置
+        // 阈值和比例为 0 或空时视为未配置
         if (!payload.long_context_threshold) payload.long_context_threshold = null;
-        if (!payload.long_context_multiplier) payload.long_context_multiplier = null;
+        if (!payload.long_context_input_rate) payload.long_context_input_rate = null;
+        if (!payload.long_context_output_rate) payload.long_context_output_rate = null;
+        if (!payload.long_context_cached_rate) payload.long_context_cached_rate = null;
         await api('/api/settings/credit_rates', { method: 'PUT', body: JSON.stringify(payload) });
         window.showToast(t('save_success'));
       } catch (e) { window.showToast(e.message, 'error'); }
