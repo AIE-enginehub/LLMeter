@@ -496,6 +496,12 @@ async fn handle_streaming_response(
                             last_usage = protocol::merge_token_usage(Some(last_usage), usage);
                         }
                     }
+                    // 兜底：逐行解析未提取到 usage 时，从完整 body 中查找 response.completed 事件
+                    if last_usage.prompt_tokens.is_none() && last_usage.completion_tokens.is_none() {
+                        if let Some(usage) = protocol::extract_responses_api_usage_from_body(&accumulated_body) {
+                            last_usage = protocol::merge_token_usage(Some(last_usage), usage);
+                        }
+                    }
                     if let Some(tx) = tx {
                         let _ = tx.send((last_usage, start.elapsed().as_millis() as i32, accumulated_body));
                     }

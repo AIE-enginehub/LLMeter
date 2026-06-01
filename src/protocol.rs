@@ -282,6 +282,37 @@ fn extract_anthropic_streaming_event(event: &Value) -> TokenUsage {
     }
 }
 
+/// 从完整 SSE body 中提取 Responses API 的 usage（兜底方案）
+/// 当逐行解析未能提取到 usage 时，从 accumulated body 中定位最后一个 response.completed 事件
+pub fn extract_responses_api_usage_from_body(body: &str) -> Option<TokenUsage> {
+    let marker = "\"type\":\"response.completed\"";
+    let pos = body.rfind(marker)?;
+
+    // 向前查找该事件所在的 "data: " 行起点
+    let search_area = &body[..pos];
+    let data_prefix = "data: ";
+    let line_start = search_area.rfind(data_prefix)?;
+    let json_start = line_start + data_prefix.len();
+
+    // 向后查找 JSON 结尾：下一个 "\ndata: " 或 "\n\n" 边界
+    let remaining = &body[json_start..];
+    let json_end = remaining.find("\ndata: ")
+        .or_else(|| remaining.find("\n\n"))
+        .map(|i| json_start + i)
+        .unwrap_or(body.len());
+
+    let json_str = body[json_start..json_end].trim();
+    let parsed: Value = serde_json::from_str(json_str).ok()?;
+    let response_obj = parsed.get("response")?;
+    let usage = extract_token_usage(Protocol::OpenAI, response_obj);
+
+    if usage.prompt_tokens.is_some() || usage.completion_tokens.is_some() {
+        Some(usage)
+    } else {
+        None
+    }
+}
+
 /// 合并两个 TokenUsage，新值覆盖旧值（None 保留旧值）
 pub fn merge_token_usage(base: Option<TokenUsage>, update: TokenUsage) -> TokenUsage {
     let base = base.unwrap_or_default();
