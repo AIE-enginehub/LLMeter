@@ -168,8 +168,9 @@ pub async fn proxy_handler(
         };
         let is_stream = protocol::is_streaming(actual_protocol, body_ref, &path);
 
-        // 为 OpenAI 流式请求自动注入 stream_options 以获取 usage 数据
-        let forwarded_body = if is_stream && actual_protocol == Protocol::OpenAI {
+        // 为 OpenAI Chat Completions 流式请求自动注入 stream_options 以获取 usage 数据
+        // Responses API (/v1/responses) 无需注入，其 response.completed 事件默认包含 usage
+        let forwarded_body = if is_stream && actual_protocol == Protocol::OpenAI && !path.starts_with("/v1/responses") {
             if let Some(mut json) = body_json.clone() {
                 if let Some(obj) = json.as_object_mut() {
                     obj.entry("stream_options").or_insert_with(|| {
@@ -323,11 +324,15 @@ async fn handle_normal_response(
         (StatusCode::BAD_GATEWAY, format!("Failed to read upstream response: {e}"))
     })?;
 
-    let resp_json: Option<Value> = match serde_json::from_slice(&resp_bytes) {
-        Ok(json) => Some(json),
-        Err(e) => {
-            tracing::warn!("Failed to parse upstream response as JSON: {}. Raw body: {}", e, String::from_utf8_lossy(&resp_bytes));
-            None
+    let resp_json: Option<Value> = if resp_bytes.is_empty() {
+        None
+    } else {
+        match serde_json::from_slice(&resp_bytes) {
+            Ok(json) => Some(json),
+            Err(e) => {
+                tracing::warn!("Failed to parse upstream response as JSON: {}. Raw body: {}", e, String::from_utf8_lossy(&resp_bytes));
+                None
+            }
         }
     };
     
@@ -530,7 +535,8 @@ async fn handle_streaming_response(
         } else {
             None
         };
-        let resp_json = Value::String(body_str);
+        // PostgreSQL JSONB 不支持 \u0000（null 字节），移除后再存储
+        let resp_json = Value::String(body_str.replace('\0', ""));
 
         let insert_res = sqlx::query(
             "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, \

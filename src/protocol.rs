@@ -222,7 +222,14 @@ pub fn extract_streaming_usage(protocol: Protocol, chunk: &str) -> Option<TokenU
                 result = Some(merge_token_usage(result, usage));
             }
         } else {
-            let usage = extract_token_usage(protocol, &parsed);
+            // Chat Completions API: usage 在顶层 parsed["usage"]
+            let mut usage = extract_token_usage(protocol, &parsed);
+            // Responses API: usage 嵌套在 parsed["response"]["usage"]（如 response.completed 事件）
+            if usage.prompt_tokens.is_none() && usage.completion_tokens.is_none() {
+                if let Some(response_obj) = parsed.get("response") {
+                    usage = extract_token_usage(protocol, response_obj);
+                }
+            }
             if usage.prompt_tokens.is_some() || usage.completion_tokens.is_some() {
                 result = Some(merge_token_usage(result, usage));
             }
