@@ -119,20 +119,20 @@ function dateRangePicker() {
     _drp_viewYear: today.getFullYear(),
     _drp_viewMonth: today.getMonth(),
 
-    get _drp_monthLabel() {
+    _drp_monthLabel() {
       const months_zh = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
       const months_en = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
       const m = window.lang === 'en' ? months_en : months_zh;
       return `${this._drp_viewYear} ${m[this._drp_viewMonth]}`;
     },
 
-    get _drp_weekDays() {
+    _drp_weekDays() {
       return window.lang === 'en'
         ? ['Mo','Tu','We','Th','Fr','Sa','Su']
         : ['一','二','三','四','五','六','日'];
     },
 
-    get _drp_days() {
+    _drp_days() {
       const y = this._drp_viewYear, m = this._drp_viewMonth;
       const firstDay = new Date(y, m, 1).getDay();
       const offset = (firstDay + 6) % 7;
