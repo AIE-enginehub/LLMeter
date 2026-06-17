@@ -98,6 +98,17 @@ const ERROR_MAP = {
   '操作失败，请稍后重试': { en: 'Operation failed, please try again later' },
   '新密码长度不能少于 6 位': { en: 'Password must be at least 6 characters' },
   '原密码错误': { en: 'Current password is incorrect' },
+  '请至少选择一个企业': { en: 'Please select at least one organization' },
+  '收件邮箱不能为空': { en: 'Recipient email is required' },
+  '月份和自定义时间段只能二选一': { en: 'Please choose month or custom range, not both' },
+  '月份格式错误，请使用 YYYY-MM': { en: 'Invalid month format, expected YYYY-MM' },
+  '请选择月份或完整的开始时间': { en: 'Please select month or provide a start time' },
+  '请选择完整的结束时间': { en: 'Please provide an end time' },
+  '结束时间必须大于开始时间': { en: 'End time must be greater than start time' },
+  '请先在系统设置中配置发件服务器地址': { en: 'Please configure outbound SMTP host in settings first' },
+  '请先在系统设置中配置发件邮箱': { en: 'Please configure sender email in settings first' },
+  '发件邮箱格式无效': { en: 'Sender email format is invalid' },
+  '收件邮箱格式无效': { en: 'Recipient email format is invalid' },
 };
 
 function friendlyError(msg) {

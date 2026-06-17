@@ -4,6 +4,9 @@
 function settingsTab() {
   return {
     rates: { input_rate: 1221, output_rate: 203.5, cached_rate: 12210, long_context_threshold: null, long_context_input_rate: null, long_context_output_rate: null, long_context_cached_rate: null },
+    mail: {
+      outbound: { host: '', port: 587, username: '', password: '', sender_email: '', sender_name: '', use_tls: true },
+    },
     pwdForm: { old_password: '', new_password: '', confirm_password: '' },
     showOldPwd: false,
     showNewPwd: false,
@@ -12,6 +15,7 @@ function settingsTab() {
     async load() {
       try {
         this.rates = await api('/api/settings/credit_rates');
+        this.mail = await api('/api/settings/mail');
       } catch (e) { window.showToast(e.message, 'error'); }
     },
 
@@ -24,6 +28,25 @@ function settingsTab() {
         if (!payload.long_context_output_rate) payload.long_context_output_rate = null;
         if (!payload.long_context_cached_rate) payload.long_context_cached_rate = null;
         await api('/api/settings/credit_rates', { method: 'PUT', body: JSON.stringify(payload) });
+        window.showToast(t('save_success'));
+      } catch (e) { window.showToast(e.message, 'error'); }
+    },
+
+    async saveMail() {
+      try {
+        const payload = {
+          outbound: {
+            host: (this.mail.outbound.host || '').trim(),
+            port: Number(this.mail.outbound.port) || 587,
+            username: (this.mail.outbound.username || '').trim(),
+            password: this.mail.outbound.password || '',
+            sender_email: (this.mail.outbound.sender_email || '').trim(),
+            sender_name: (this.mail.outbound.sender_name || '').trim(),
+            use_tls: !!this.mail.outbound.use_tls,
+          }
+        };
+        await api('/api/settings/mail', { method: 'PUT', body: JSON.stringify(payload) });
+        this.mail = payload;
         window.showToast(t('save_success'));
       } catch (e) { window.showToast(e.message, 'error'); }
     },

@@ -70,8 +70,9 @@ pub async fn run_migrations(pool: &PgPool) {
     let sql2 = include_str!("../migrations/002_credit_system.sql");
     let sql3 = include_str!("../migrations/003_overdraft.sql");
     let sql4 = include_str!("../migrations/004_long_context.sql");
+    let sql5 = include_str!("../migrations/005_mail_settings.sql");
 
-    for sql in [sql1, sql2, sql3, sql4] {
+    for sql in [sql1, sql2, sql3, sql4, sql5] {
         for statement in sql.split(';') {
             let meaningful: String = statement
                 .lines()
@@ -171,6 +172,42 @@ pub struct CreditRates {
     pub long_context_cached_rate: Option<f64>,
 }
 
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+pub struct SmtpSettings {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub sender_email: String,
+    pub sender_name: String,
+    #[serde(default = "default_true")]
+    pub use_tls: bool,
+}
+
+impl Default for SmtpSettings {
+    fn default() -> Self {
+        Self {
+            host: String::new(),
+            port: 587,
+            username: String::new(),
+            password: String::new(),
+            sender_email: String::new(),
+            sender_name: String::new(),
+            use_tls: true,
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone, Default)]
+pub struct MailSettings {
+    #[serde(default)]
+    pub outbound: SmtpSettings,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 impl Default for CreditRates {
     fn default() -> Self {
         Self {
@@ -201,6 +238,24 @@ pub async fn get_credit_rates(pool: &PgPool) -> CreditRates {
         }
     }
     CreditRates::default()
+}
+
+/// 获取邮件收发配置（存储在 global_settings.mail_settings）
+pub async fn get_mail_settings(pool: &PgPool) -> MailSettings {
+    let row = sqlx::query("SELECT value FROM global_settings WHERE key = 'mail_settings'")
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+
+    if let Some(r) = row {
+        if let Ok(val) = r.try_get::<serde_json::Value, _>("value") {
+            if let Ok(settings) = serde_json::from_value(val) {
+                return settings;
+            }
+        }
+    }
+    MailSettings::default()
 }
 
 /// 扣除组织积分并记录流水

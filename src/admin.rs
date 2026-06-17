@@ -6,6 +6,11 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use lettre::{
+    message::{Mailbox, SinglePart},
+    transport::smtp::authentication::Credentials,
+    AsyncSmtpTransport, AsyncTransport, Tokio1Executor,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -99,7 +104,12 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/logs/{id}", get(get_log))
         .route("/api/stats", get(get_stats))
         // 积分系统
-        .route("/api/settings/credit_rates", get(get_credit_rates).put(update_credit_rates))
+        .route(
+            "/api/settings/credit_rates",
+            get(get_credit_rates).put(update_credit_rates),
+        )
+        .route("/api/settings/mail", get(get_mail_settings).put(update_mail_settings))
+        .route("/api/usage/export_report", post(export_usage_report))
         .route("/api/orgs/{id}/credit", post(recharge_credit))
         .route("/api/orgs/{id}/credit_logs", get(list_credit_logs))
 }
@@ -907,6 +917,347 @@ async fn update_credit_rates(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(body))
+}
+
+/// GET /api/settings/mail
+async fn get_mail_settings(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+) -> Result<Json<crate::db::MailSettings>, (StatusCode, Json<ErrorResponse>)> {
+    let settings = crate::db::get_mail_settings(&state.pool).await;
+    Ok(Json(settings))
+}
+
+/// PUT /api/settings/mail
+async fn update_mail_settings(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+    Json(body): Json<crate::db::MailSettings>,
+) -> Result<Json<crate::db::MailSettings>, (StatusCode, Json<ErrorResponse>)> {
+    let val = serde_json::to_value(&body).unwrap();
+    sqlx::query(
+        "INSERT INTO global_settings (key, value) VALUES ('mail_settings', $1) \
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+    )
+    .bind(val)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(body))
+}
+
+#[derive(Deserialize)]
+struct ExportUsageReportRequest {
+    org_ids: Vec<Uuid>,
+    month: Option<String>,
+    start_time: Option<String>,
+    end_time: Option<String>,
+    recipient_email: String,
+}
+
+#[derive(Serialize)]
+struct ExportUsageReportResponse {
+    ok: bool,
+    start_time: DateTime<Utc>,
+    end_time: DateTime<Utc>,
+    org_count: usize,
+    summary_count: usize,
+    total_requests: i64,
+    total_credit_cost: f64,
+}
+
+#[derive(sqlx::FromRow)]
+struct UsageReportSummaryRow {
+    org_name: String,
+    request_count: i64,
+    total_credit_cost: f64,
+}
+
+/// POST /api/usage/export_report
+async fn export_usage_report(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+    Json(body): Json<ExportUsageReportRequest>,
+) -> Result<Json<ExportUsageReportResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if body.org_ids.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "请至少选择一个企业"));
+    }
+    if body.recipient_email.trim().is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "收件邮箱不能为空"));
+    }
+
+    let (start_time, end_time) = parse_report_time_range(
+        body.month.as_deref(),
+        body.start_time.as_deref(),
+        body.end_time.as_deref(),
+    )?;
+
+    let mail_settings = crate::db::get_mail_settings(&state.pool).await;
+    validate_mail_settings(&mail_settings)?;
+
+    let summaries = sqlx::query_as::<_, UsageReportSummaryRow>(
+        "SELECT o.name AS org_name, \
+                COUNT(*)::BIGINT AS request_count, \
+                COALESCE(SUM(r.credit_cost)::FLOAT8, 0) AS total_credit_cost \
+         FROM request_logs r \
+         JOIN organizations o ON o.id = r.org_id \
+         WHERE r.org_id = ANY($1) AND r.created_at >= $2 AND r.created_at < $3 \
+         GROUP BY o.name \
+         ORDER BY o.name",
+    )
+    .bind(&body.org_ids)
+    .bind(start_time)
+    .bind(end_time)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let total_requests: i64 = summaries.iter().map(|s| s.request_count).sum();
+    let total_credit_cost: f64 = summaries.iter().map(|s| s.total_credit_cost).sum();
+    let report_html = build_usage_report_html(
+        start_time,
+        end_time,
+        &summaries,
+        total_requests,
+        total_credit_cost,
+    );
+    send_usage_report_mail(
+        &mail_settings,
+        body.recipient_email.trim(),
+        start_time,
+        end_time,
+        &report_html,
+    )
+    .await?;
+
+    Ok(Json(ExportUsageReportResponse {
+        ok: true,
+        start_time,
+        end_time,
+        org_count: body.org_ids.len(),
+        summary_count: summaries.len(),
+        total_requests,
+        total_credit_cost,
+    }))
+}
+
+fn parse_report_time_range(
+    month: Option<&str>,
+    start_time: Option<&str>,
+    end_time: Option<&str>,
+) -> Result<(DateTime<Utc>, DateTime<Utc>), (StatusCode, Json<ErrorResponse>)> {
+    let has_custom = start_time.is_some() || end_time.is_some();
+    if month.is_some() && has_custom {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "月份和自定义时间段只能二选一",
+        ));
+    }
+
+    if let Some(month_str) = month {
+        let month_start_date = chrono::NaiveDate::parse_from_str(
+            &format!("{month_str}-01"),
+            "%Y-%m-%d",
+        )
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "月份格式错误，请使用 YYYY-MM"))?;
+        let month_end_date = month_start_date
+            .checked_add_months(chrono::Months::new(1))
+            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "月份无效"))?;
+        let month_start = month_start_date
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "月份无效"))?
+            .and_utc();
+        let month_end = month_end_date
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "月份无效"))?
+            .and_utc();
+        return Ok((month_start, month_end));
+    }
+
+    let parse_start = |s: &str| {
+        chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+            .ok()
+            .or_else(|| {
+                chrono::NaiveDateTime::parse_from_str(&format!("{s} 00:00:00"), "%Y-%m-%d %H:%M:%S")
+                    .ok()
+            })
+            .map(|dt| dt.and_utc())
+    };
+    let parse_end_exclusive = |s: &str| {
+        chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+            .ok()
+            .map(|dt| dt.and_utc() + chrono::TimeDelta::seconds(1))
+            .or_else(|| {
+                chrono::NaiveDateTime::parse_from_str(&format!("{s} 23:59:59"), "%Y-%m-%d %H:%M:%S")
+                    .ok()
+                    .map(|dt| dt.and_utc() + chrono::TimeDelta::seconds(1))
+            })
+    };
+
+    let start = start_time
+        .and_then(parse_start)
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "请选择月份或完整的开始时间"))?;
+    let end = end_time
+        .and_then(parse_end_exclusive)
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "请选择完整的结束时间"))?;
+
+    if end <= start {
+        return Err(err(StatusCode::BAD_REQUEST, "结束时间必须大于开始时间"));
+    }
+
+    Ok((start, end))
+}
+
+fn validate_mail_settings(
+    settings: &crate::db::MailSettings,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if settings.outbound.host.trim().is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "请先在系统设置中配置发件服务器地址"));
+    }
+    if settings.outbound.sender_email.trim().is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "请先在系统设置中配置发件邮箱"));
+    }
+    Ok(())
+}
+
+fn build_usage_report_html(
+    start_time: DateTime<Utc>,
+    end_time: DateTime<Utc>,
+    summaries: &[UsageReportSummaryRow],
+    total_requests: i64,
+    total_credit_cost: f64,
+) -> String {
+    let mut rows = String::new();
+    for row in summaries {
+        rows.push_str(&format!(
+            "<tr>\
+                <td style=\"padding:10px;border:1px solid #e5e7eb;\">{}</td>\
+                <td style=\"padding:10px;border:1px solid #e5e7eb;text-align:right;\">{}</td>\
+                <td style=\"padding:10px;border:1px solid #e5e7eb;text-align:right;\">{:.4}</td>\
+            </tr>",
+            html_escape(&row.org_name),
+            row.request_count,
+            row.total_credit_cost,
+        ));
+    }
+
+    if rows.is_empty() {
+        rows.push_str(
+            "<tr><td colspan=\"3\" style=\"padding:12px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;\">该时间段无数据</td></tr>",
+        );
+    }
+
+    format!(
+        "<!doctype html>
+<html>
+<body style=\"margin:0;padding:24px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif;color:#111827;\">
+  <div style=\"max-width:760px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;\">
+    <div style=\"padding:20px 24px;background:linear-gradient(135deg,#1e293b,#334155);color:#ffffff;\">
+      <h2 style=\"margin:0;font-size:20px;\">LLMeter Credit 使用汇总报表</h2>
+      <p style=\"margin:8px 0 0 0;font-size:13px;opacity:.9;\">时间范围：{} ~ {}</p>
+    </div>
+    <div style=\"padding:20px 24px;\">
+      <div style=\"display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;\">
+        <div style=\"background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;min-width:160px;\">
+          <div style=\"font-size:12px;color:#64748b;\">总调用次数</div>
+          <div style=\"font-size:20px;font-weight:700;margin-top:4px;\">{}</div>
+        </div>
+        <div style=\"background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;min-width:160px;\">
+          <div style=\"font-size:12px;color:#64748b;\">总 Credit 用量</div>
+          <div style=\"font-size:20px;font-weight:700;margin-top:4px;color:#4f46e5;\">{:.4}</div>
+        </div>
+      </div>
+      <table style=\"width:100%;border-collapse:collapse;border:1px solid #e5e7eb;\">
+        <thead>
+          <tr style=\"background:#f8fafc;\">
+            <th style=\"padding:10px;border:1px solid #e5e7eb;text-align:left;font-size:13px;color:#475569;\">组织</th>
+            <th style=\"padding:10px;border:1px solid #e5e7eb;text-align:right;font-size:13px;color:#475569;\">调用次数</th>
+            <th style=\"padding:10px;border:1px solid #e5e7eb;text-align:right;font-size:13px;color:#475569;\">Credit 用量</th>
+          </tr>
+        </thead>
+        <tbody>{}</tbody>
+      </table>
+      <p style=\"margin:14px 0 0 0;font-size:12px;color:#94a3b8;\">此邮件由 LLMeter 自动发送。</p>
+    </div>
+  </div>
+</body>
+</html>",
+        start_time.format("%Y-%m-%d %H:%M:%S"),
+        (end_time - chrono::TimeDelta::seconds(1)).format("%Y-%m-%d %H:%M:%S"),
+        total_requests,
+        total_credit_cost,
+        rows
+    )
+}
+
+fn html_escape(v: &str) -> String {
+    v.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+async fn send_usage_report_mail(
+    settings: &crate::db::MailSettings,
+    recipient_email: &str,
+    start_time: DateTime<Utc>,
+    end_time: DateTime<Utc>,
+    html_content: &str,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    let sender = if settings.outbound.sender_name.trim().is_empty() {
+        settings.outbound.sender_email.clone()
+    } else {
+        format!(
+            "{} <{}>",
+            settings.outbound.sender_name.trim(),
+            settings.outbound.sender_email.trim()
+        )
+    };
+
+    let from_mailbox: Mailbox = sender
+        .parse()
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "发件邮箱格式无效"))?;
+    let to_mailbox: Mailbox = recipient_email
+        .parse()
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "收件邮箱格式无效"))?;
+
+    let subject = format!(
+        "LLMeter Credit 使用报表 {} - {}",
+        start_time.format("%Y-%m-%d"),
+        (end_time - chrono::TimeDelta::seconds(1)).format("%Y-%m-%d")
+    );
+
+    let email = lettre::Message::builder()
+        .from(from_mailbox)
+        .to(to_mailbox)
+        .subject(subject)
+        .singlepart(SinglePart::html(html_content.to_string()))
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut transport_builder = if settings.outbound.use_tls {
+        AsyncSmtpTransport::<Tokio1Executor>::relay(settings.outbound.host.trim())
+            .map_err(|_| err(StatusCode::BAD_REQUEST, "发件服务器地址无效"))?
+    } else {
+        AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(settings.outbound.host.trim())
+    };
+    transport_builder = transport_builder.port(settings.outbound.port);
+
+    if !settings.outbound.username.trim().is_empty() {
+        transport_builder = transport_builder.credentials(Credentials::new(
+            settings.outbound.username.clone(),
+            settings.outbound.password.clone(),
+        ));
+    }
+
+    let mailer = transport_builder.build();
+    mailer
+        .send(email)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("邮件发送失败: {e}")))?;
+
+    Ok(())
 }
 
 /// POST /api/orgs/:id/credit
