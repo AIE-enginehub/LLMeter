@@ -29,6 +29,7 @@ COPY Cargo.toml Cargo.lock* ./
 COPY src/ src/
 COPY static/ static/
 COPY migrations/ migrations/
+COPY fonts/ fonts/
 
 # 使用 BuildKit 缓存加速后续构建，避免每次都重新下载和编译依赖
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
