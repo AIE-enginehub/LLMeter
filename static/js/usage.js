@@ -14,10 +14,11 @@ function usageTab() {
     exportMonthYear: new Date().getFullYear(),
     stats: null,
     orgs: [],
+    orgProjects: [],
     orgKeys: [],
     /** 当前视角: 'token' | 'credit' */
     perspective: 'token',
-    filter: { org_id: '', api_key_id: '', model: '' },
+    filter: { org_id: '', project_id: '', api_key_id: '', model: '' },
     exportForm: {
       org_ids: [],
       mode: 'month', // month | custom
@@ -34,6 +35,14 @@ function usageTab() {
     selectCustomEnd(cell) {
       const val = this._drp_select(cell);
       if (val) { this.customRange.end = val; this._drp_showPanel = ''; this.load(); }
+    },
+    selectExportStart(cell) {
+      const val = this._drp_select(cell);
+      if (val) { this.exportForm.start_time = val; this._drp_showPanel = ''; }
+    },
+    selectExportEnd(cell) {
+      const val = this._drp_select(cell);
+      if (val) { this.exportForm.end_time = val; this._drp_showPanel = ''; }
     },
     modelSearchTimer: null,
 
@@ -66,6 +75,7 @@ function usageTab() {
           url += `?days=${this.days}`;
         }
         if (this.filter.org_id) url += `&org_id=${this.filter.org_id}`;
+        if (this.filter.project_id) url += `&project_id=${this.filter.project_id}`;
         if (this.filter.api_key_id) url += `&api_key_id=${this.filter.api_key_id}`;
         if (this.filter.model) url += `&model=${encodeURIComponent(this.filter.model)}`;
         this.stats = await api(url);
@@ -73,13 +83,27 @@ function usageTab() {
       this.loading = false;
     },
 
-    /** 切换组织时加载该组织的 Key 列表 */
+    /** 切换组织时加载该组织的项目列表 */
     async onOrgChange() {
+      this.filter.project_id = '';
       this.filter.api_key_id = '';
+      this.orgProjects = [];
       this.orgKeys = [];
       if (this.filter.org_id) {
         try {
-          this.orgKeys = await api(`/api/orgs/${this.filter.org_id}/keys`);
+          this.orgProjects = await api(`/api/orgs/${this.filter.org_id}/projects`);
+        } catch { this.orgProjects = []; }
+      }
+      await this.load();
+    },
+
+    /** 切换项目时加载该项目的 Key 列表 */
+    async onProjectChange() {
+      this.filter.api_key_id = '';
+      this.orgKeys = [];
+      if (this.filter.project_id) {
+        try {
+          this.orgKeys = await api(`/api/projects/${this.filter.project_id}/keys`);
         } catch { this.orgKeys = []; }
       }
       await this.load();

@@ -14,16 +14,18 @@ pub struct Organization {
     pub slug: String,
     pub credit: rust_decimal::Decimal,
     pub overdraft_limit: rust_decimal::Decimal,
+    pub credit_price: rust_decimal::Decimal,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-/// API 密钥（颁发给组织的访问凭证）
+/// API 密钥（颁发给组织的访问凭证，归属于项目）
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
 pub struct ApiKey {
     pub id: Uuid,
     pub org_id: Uuid,
+    pub project_id: Option<Uuid>,
     pub name: String,
     pub key_hash: String,
     pub key_prefix: String,
@@ -66,13 +68,38 @@ pub async fn init_pool(database_url: &str) -> PgPool {
 
 /// 执行 SQL 迁移（所有语句使用 IF NOT EXISTS，天然幂等）
 pub async fn run_migrations(pool: &PgPool) {
-    let sql1 = include_str!("../migrations/001_init.sql");
-    let sql2 = include_str!("../migrations/002_credit_system.sql");
-    let sql3 = include_str!("../migrations/003_overdraft.sql");
-    let sql4 = include_str!("../migrations/004_long_context.sql");
-    let sql5 = include_str!("../migrations/005_mail_settings.sql");
+    // 创建迁移记录表（追踪已执行的迁移，确保每个文件只执行一次）
+    let _ = sqlx::query(
+        "CREATE TABLE IF NOT EXISTS _migrations (
+            name VARCHAR(255) PRIMARY KEY,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )"
+    ).execute(pool).await;
 
-    for sql in [sql1, sql2, sql3, sql4, sql5] {
+    let migrations: &[(&str, &str)] = &[
+        ("001_init",                include_str!("../migrations/001_init.sql")),
+        ("002_credit_system",       include_str!("../migrations/002_credit_system.sql")),
+        ("003_overdraft",           include_str!("../migrations/003_overdraft.sql")),
+        ("004_long_context",        include_str!("../migrations/004_long_context.sql")),
+        ("005_mail_settings",       include_str!("../migrations/005_mail_settings.sql")),
+        ("006_projects",            include_str!("../migrations/006_projects.sql")),
+        ("007_project_data_migration", include_str!("../migrations/007_project_data_migration.sql")),
+        ("008_credit_price",        include_str!("../migrations/008_credit_price.sql")),
+    ];
+
+    for (name, sql) in migrations {
+        let applied: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM _migrations WHERE name = $1)")
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
+
+        if applied {
+            continue;
+        }
+
+        tracing::info!("执行迁移: {name}");
+        let mut has_error = false;
         for statement in sql.split(';') {
             let meaningful: String = statement
                 .lines()
@@ -83,8 +110,17 @@ pub async fn run_migrations(pool: &PgPool) {
                 continue;
             }
             if let Err(e) = sqlx::query(statement.trim()).execute(pool).await {
-                tracing::error!("迁移执行失败: {e}");
+                tracing::error!("迁移 {name} 执行失败: {e}");
+                has_error = true;
+                break;
             }
+        }
+
+        if !has_error {
+            let _ = sqlx::query("INSERT INTO _migrations (name) VALUES ($1) ON CONFLICT DO NOTHING")
+                .bind(name)
+                .execute(pool)
+                .await;
         }
     }
     tracing::info!("数据库迁移完成");
@@ -102,9 +138,9 @@ pub async fn find_api_key_by_hash(
     let rec = sqlx::query(
         r#"
         SELECT
-            k.id AS k_id, k.org_id, k.name AS k_name, k.key_hash, k.key_prefix,
+            k.id AS k_id, k.org_id, k.project_id, k.name AS k_name, k.key_hash, k.key_prefix,
             k.is_active AS k_active, k.last_used_at, k.created_at AS k_created,
-            o.id AS o_id, o.name AS o_name, o.slug, o.credit, o.overdraft_limit,
+            o.id AS o_id, o.name AS o_name, o.slug, o.credit, o.overdraft_limit, o.credit_price,
             o.is_active AS o_active, o.created_at AS o_created, o.updated_at AS o_updated
         FROM api_keys k
         JOIN organizations o ON o.id = k.org_id
@@ -119,6 +155,7 @@ pub async fn find_api_key_by_hash(
     let api_key = ApiKey {
         id: rec.get("k_id"),
         org_id: rec.get("org_id"),
+        project_id: rec.get("project_id"),
         name: rec.get("k_name"),
         key_hash: rec.get("key_hash"),
         key_prefix: rec.get("key_prefix"),
@@ -133,6 +170,7 @@ pub async fn find_api_key_by_hash(
         slug: rec.get("slug"),
         credit: rec.get("credit"),
         overdraft_limit: rec.get("overdraft_limit"),
+        credit_price: rec.get("credit_price"),
         is_active: rec.get("o_active"),
         created_at: rec.get("o_created"),
         updated_at: rec.get("o_updated"),

@@ -21,7 +21,9 @@ use crate::static_files;
 struct LogMeta {
     id: Uuid,
     org_id: Uuid,
+    project_id: Option<Uuid>,
     api_key_id: Uuid,
+    credit_price: rust_decimal::Decimal,
     provider: String,
     model: Option<String>,
     path: String,
@@ -116,11 +118,12 @@ pub async fn proxy_handler(
         };
         let log_id = Uuid::new_v4();
         let _ = sqlx::query(
-            "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, request_body, status, error_message, response_status, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, false, $8, 'error', 'Insufficient quota', 402, now())"
+            "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, request_body, status, error_message, response_status, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, $9, 'error', 'Insufficient quota', 402, now())"
         )
         .bind(log_id)
         .bind(org.id)
+        .bind(api_key_record.project_id)
         .bind(api_key_record.id)
         .bind(provider)
         .bind(model_name.as_deref())
@@ -215,13 +218,12 @@ pub async fn proxy_handler(
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("Upstream request failed via '{}': {e}, trying next config...", model_config.name);
-                // 记录失败日志
                 let fail_id = Uuid::new_v4();
                 let _ = sqlx::query(
-                    "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, request_body, status, error_message, duration_ms, updated_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'error', $10, $11, now())"
+                    "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, request_body, status, error_message, duration_ms, updated_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'error', $11, $12, now())"
                 )
-                .bind(fail_id).bind(org.id).bind(api_key_record.id)
+                .bind(fail_id).bind(org.id).bind(api_key_record.project_id).bind(api_key_record.id)
                 .bind(&model_config.name).bind(model_name.as_deref()).bind(&path).bind(method.to_string())
                 .bind(is_stream).bind(body_json.as_ref())
                 .bind(format!("Upstream unreachable: {e}"))
@@ -247,10 +249,10 @@ pub async fn proxy_handler(
 
             let fail_id = Uuid::new_v4();
             let _ = sqlx::query(
-                "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, request_body, status, error_message, response_status, response_body, duration_ms, updated_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'error', $10, $11, $12, $13, now())"
+                "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, request_body, status, error_message, response_status, response_body, duration_ms, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'error', $11, $12, $13, $14, now())"
             )
-            .bind(fail_id).bind(org.id).bind(api_key_record.id)
+            .bind(fail_id).bind(org.id).bind(api_key_record.project_id).bind(api_key_record.id)
             .bind(&model_config.name).bind(model_name.as_deref()).bind(&path).bind(method.to_string())
             .bind(is_stream).bind(body_json.as_ref())
             .bind(&err_msg)
@@ -268,7 +270,9 @@ pub async fn proxy_handler(
         let log_meta = LogMeta {
             id: log_id,
             org_id: org.id,
+            project_id: api_key_record.project_id,
             api_key_id: api_key_record.id,
+            credit_price: org.credit_price,
             provider: model_config.name.clone(),
             model: model_name.clone(),
             path: path.clone(),
@@ -357,12 +361,12 @@ async fn handle_normal_response(
         };
 
         let insert_res = sqlx::query(
-            "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, \
+            "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, \
              request_body, response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
              total_tokens, duration_ms, error_message, response_body, updated_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now())"
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now())"
         )
-        .bind(log_id).bind(meta.org_id).bind(meta.api_key_id)
+        .bind(log_id).bind(meta.org_id).bind(meta.project_id).bind(meta.api_key_id)
         .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
         .bind(meta.is_stream).bind(meta.request_body.as_ref())
         .bind(status_code as i32).bind(status_str)
@@ -376,7 +380,6 @@ async fn handle_normal_response(
             tracing::error!("Failed to insert request_log: {}", e);
         }
 
-        // 透传请求不扣积分
         if is_passthrough { return; }
 
         // 扣除积分
@@ -417,9 +420,11 @@ async fn handle_normal_response(
             if cost > 0.0 {
                 if let Some(decimal_cost) = rust_decimal::Decimal::from_f64(cost) {
                     let _ = crate::db::deduct_credit(&pool, org_id, decimal_cost, &log_id.to_string()).await;
-                    let _ = sqlx::query("UPDATE request_logs SET credit_cost = $1, is_long_context = $3 WHERE id = $2")
+                    let money = decimal_cost * meta.credit_price;
+                    let _ = sqlx::query("UPDATE request_logs SET credit_cost = $1, money_cost = $3, is_long_context = $4 WHERE id = $2")
                         .bind(decimal_cost)
                         .bind(log_id)
+                        .bind(money)
                         .bind(is_long_context)
                         .execute(&pool)
                         .await;
@@ -521,11 +526,11 @@ async fn handle_streaming_response(
                 tracing::warn!("Stream channel closed without sending usage for log {log_id}, marking as error");
                 let duration_ms = start.elapsed().as_millis() as i32;
                 let _ = sqlx::query(
-                    "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, \
+                    "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, \
                      request_body, response_status, status, duration_ms, error_message, updated_at) \
-                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'error',$11,'Stream interrupted',$12)"
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'error',$12,'Stream interrupted',$13)"
                 )
-                .bind(log_id).bind(meta.org_id).bind(meta.api_key_id)
+                .bind(log_id).bind(meta.org_id).bind(meta.project_id).bind(meta.api_key_id)
                 .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
                 .bind(meta.is_stream).bind(meta.request_body.as_ref())
                 .bind(status_code as i32).bind(duration_ms).bind(chrono::Utc::now())
@@ -545,12 +550,12 @@ async fn handle_streaming_response(
         let resp_json = Value::String(body_str.replace('\0', ""));
 
         let insert_res = sqlx::query(
-            "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, \
+            "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, \
              request_body, response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
              total_tokens, duration_ms, error_message, response_body, updated_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now())"
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now())"
         )
-        .bind(log_id).bind(meta.org_id).bind(meta.api_key_id)
+        .bind(log_id).bind(meta.org_id).bind(meta.project_id).bind(meta.api_key_id)
         .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
         .bind(meta.is_stream).bind(meta.request_body.as_ref())
         .bind(status_code as i32).bind(status_str)
@@ -564,7 +569,6 @@ async fn handle_streaming_response(
             tracing::error!("Failed to insert request_log (stream): {}", e);
         }
 
-        // 透传请求不扣积分
         if is_passthrough { return; }
 
         // 扣除积分
@@ -605,9 +609,11 @@ async fn handle_streaming_response(
             if cost > 0.0 {
                 if let Some(decimal_cost) = rust_decimal::Decimal::from_f64(cost) {
                     let _ = crate::db::deduct_credit(&pool_clone, org_id, decimal_cost, &log_id.to_string()).await;
-                    let _ = sqlx::query("UPDATE request_logs SET credit_cost = $1, is_long_context = $3 WHERE id = $2")
+                    let money = decimal_cost * meta.credit_price;
+                    let _ = sqlx::query("UPDATE request_logs SET credit_cost = $1, money_cost = $3, is_long_context = $4 WHERE id = $2")
                         .bind(decimal_cost)
                         .bind(log_id)
+                        .bind(money)
                         .bind(is_long_context)
                         .execute(&pool_clone)
                         .await;

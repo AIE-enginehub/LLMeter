@@ -1,22 +1,33 @@
 /**
- * 组织管理 Tab — 组织 CRUD、API Key 管理、模型配置、积分充值与流水
+ * 组织管理 Tab — 组织 CRUD、项目管理、API Key 管理、模型配置、积分充值与流水
  */
 function orgsTab() {
   return {
     loading: false,
     orgs: [],
     selectedOrg: null,
-    editOrg: { credit: 0 },
+    editOrg: { credit: 0, credit_price: 0 },
+    /* 项目相关 */
+    projects: [],
+    selectedProject: null,
+    showCreateProject: false,
+    showEditProject: false,
+    newProject: { name: '', description: '' },
+    editProject: { id: null, name: '', description: '', is_active: true },
+    /* Key 相关 */
     keys: [],
-    models: [],
-    showCreateOrg: false,
     showCreateKey: false,
+    createdKey: null,
+    newKeyName: '',
+    /* 模型配置 */
+    models: [],
     showModelForm: false,
+    modelForm: { id: null, name: '', protocol: 'openai', model_patterns: '', base_url: '', real_api_key: '', priority: 0 },
+    /* 其他 */
+    showCreateOrg: false,
     showRecharge: false,
     showCreditLogs: false,
-    createdKey: null,
     newOrg: { name: '', slug: '' },
-    newKeyName: '',
     rechargeAmount: 0,
     rechargeNote: '',
     creditLogs: [],
@@ -24,7 +35,6 @@ function orgsTab() {
     creditLogPageSize: 15,
     creditLogTotal: 0,
     creditLogType: '',
-    modelForm: { id: null, name: '', protocol: 'openai', model_patterns: '', base_url: '', real_api_key: '', priority: 0 },
 
     async load() {
       this.loading = true;
@@ -50,17 +60,150 @@ function orgsTab() {
 
     async selectOrg(org) {
       this.selectedOrg = org;
-      this.editOrg = { name: org.name, slug: org.slug, is_active: org.is_active ? 'true' : 'false', credit: org.credit || 0, overdraft_limit: org.overdraft_limit || 0, total_consumed: org.total_consumed || 0 };
-      await Promise.all([this.loadKeys(), this.loadModels()]);
+      this.editOrg = { name: org.name, slug: org.slug, is_active: org.is_active ? 'true' : 'false', credit: org.credit || 0, overdraft_limit: org.overdraft_limit || 0, credit_price: org.credit_price || 0, total_consumed: org.total_consumed || 0 };
+      this.selectedProject = null;
+      this.keys = [];
+      await Promise.all([this.loadProjects(), this.loadModels()]);
     },
 
-    async loadKeys() {
-      try { this.keys = await api(`/api/orgs/${this.selectedOrg.id}/keys`); } catch { this.keys = []; }
+    // ── 项目管理 ──
+
+    async loadProjects() {
+      try {
+        this.projects = await api(`/api/orgs/${this.selectedOrg.id}/projects`);
+        if (this.projects.length > 0) {
+          if (!this.selectedProject) {
+            await this.selectProject(this.projects[0]);
+          } else {
+            const updated = this.projects.find(p => p.id === this.selectedProject.id);
+            if (updated) {
+              await this.selectProject(updated);
+            } else {
+              await this.selectProject(this.projects[0]);
+            }
+          }
+        } else {
+          this.selectedProject = null;
+          this.keys = [];
+        }
+      } catch { this.projects = []; }
     },
+
+    async selectProject(project) {
+      this.selectedProject = project;
+      await this.loadKeys();
+    },
+
+    async createProjectAction() {
+      try {
+        const created = await api(`/api/orgs/${this.selectedOrg.id}/projects`, { method: 'POST', body: JSON.stringify(this.newProject) });
+        this.newProject = { name: '', description: '' };
+        this.showCreateProject = false;
+        window.showToast(t('project_created'));
+        await this.loadProjects();
+        const proj = this.projects.find(p => p.id === created.id);
+        if (proj) await this.selectProject(proj);
+      } catch (e) { window.showToast(e.message, 'error'); }
+    },
+
+    openEditProject(project) {
+      this.editProject = { id: project.id, name: project.name, description: project.description, is_active: project.is_active };
+      this.showEditProject = true;
+    },
+
+    async saveProjectAction() {
+      try {
+        await api(`/api/projects/${this.editProject.id}`, { method: 'PUT', body: JSON.stringify({
+          name: this.editProject.name,
+          description: this.editProject.description,
+          is_active: this.editProject.is_active
+        }) });
+        this.showEditProject = false;
+        window.showToast(t('save_success'));
+        await this.loadProjects();
+      } catch (e) { window.showToast(e.message, 'error'); }
+    },
+
+    async deleteProject(id) {
+      if (!await window.showConfirm(t('confirm_delete_project'))) return;
+      try {
+        await api(`/api/projects/${id}`, { method: 'DELETE' });
+        window.showToast(t('project_deleted'));
+        if (this.selectedProject && this.selectedProject.id === id) {
+          this.selectedProject = null;
+          this.keys = [];
+        }
+        await this.loadProjects();
+      } catch (e) { window.showToast(e.message, 'error'); }
+    },
+
+    // ── API Key 管理 ──
+
+    async loadKeys() {
+      if (!this.selectedProject) { this.keys = []; return; }
+      try { this.keys = await api(`/api/projects/${this.selectedProject.id}/keys`); } catch { this.keys = []; }
+    },
+
+    async createKey() {
+      if (!this.selectedProject) return;
+      try {
+        const res = await api(`/api/projects/${this.selectedProject.id}/keys`, { method: 'POST', body: JSON.stringify({ name: this.newKeyName }) });
+        this.createdKey = res;
+        this.newKeyName = '';
+        this.showCreateKey = false;
+        window.showToast(t('key_created'));
+        await this.loadKeys();
+      } catch (e) { window.showToast(e.message, 'error'); }
+    },
+
+    async deleteKey(id) {
+      if (!await window.showConfirm(t('confirm_delete_key'))) return;
+      try {
+        await api(`/api/keys/${id}`, { method: 'DELETE' });
+        window.showToast(t('key_deleted'));
+        await this.loadKeys();
+      } catch (e) { window.showToast(e.message, 'error'); }
+    },
+
+    // ── 模型配置 ──
 
     async loadModels() {
       try { this.models = await api(`/api/orgs/${this.selectedOrg.id}/models`); } catch { this.models = []; }
     },
+
+    openModelForm(model = null) {
+      if (model) {
+        this.modelForm = { id: model.id, name: model.name, protocol: model.protocol, model_patterns: model.model_patterns, base_url: model.base_url, real_api_key: model.real_api_key, priority: model.priority };
+      } else {
+        this.modelForm = { id: null, name: '', protocol: 'openai', model_patterns: '', base_url: '', real_api_key: '', priority: 0 };
+      }
+      this.showModelForm = true;
+    },
+
+    async saveModel() {
+      try {
+        if (this.modelForm.id) {
+          await api(`/api/models/${this.modelForm.id}`, { method: 'PUT', body: JSON.stringify(this.modelForm) });
+          window.showToast(t('model_updated'));
+        } else {
+          await api(`/api/orgs/${this.selectedOrg.id}/models`, { method: 'POST', body: JSON.stringify(this.modelForm) });
+          window.showToast(t('model_added'));
+        }
+        this.showModelForm = false;
+        await this.loadModels();
+      } catch (e) { window.showToast(e.message, 'error'); }
+    },
+
+    async deleteModel(id) {
+      if (!await window.showConfirm(t('confirm_delete_model'))) return;
+      try {
+        await api(`/api/models/${id}`, { method: 'DELETE' });
+        window.showToast(t('model_deleted'));
+        await this.loadModels();
+      } catch (e) { window.showToast(e.message, 'error'); }
+    },
+
+    // ── 组织 CRUD ──
 
     async createOrg() {
       try {
@@ -80,11 +223,13 @@ function orgsTab() {
           name: this.editOrg.name,
           slug: this.editOrg.slug,
           is_active: this.editOrg.is_active === 'true' || this.editOrg.is_active === true,
-          overdraft_limit: Number(this.editOrg.overdraft_limit) || 0
+          overdraft_limit: Number(this.editOrg.overdraft_limit) || 0,
+          credit_price: Number(this.editOrg.credit_price) || 0
         }) });
         Object.assign(this.selectedOrg, updated);
         this.editOrg.is_active = updated.is_active;
         this.editOrg.overdraft_limit = updated.overdraft_limit || 0;
+        this.editOrg.credit_price = updated.credit_price || 0;
         this.editOrg.total_consumed = updated.total_consumed || 0;
         window.showToast(t('save_success'));
         await this.load();
@@ -100,6 +245,8 @@ function orgsTab() {
         await this.load();
       } catch (e) { window.showToast(e.message, 'error'); }
     },
+
+    // ── 积分管理 ──
 
     async rechargeCredit() {
       try {
@@ -138,58 +285,6 @@ function orgsTab() {
 
     async creditLogNext() {
       if (this.creditLogPage < this.creditLogTotalPages) { this.creditLogPage++; await this.loadCreditLogs(false); }
-    },
-
-    async createKey() {
-      try {
-        const res = await api(`/api/orgs/${this.selectedOrg.id}/keys`, { method: 'POST', body: JSON.stringify({ name: this.newKeyName }) });
-        this.createdKey = res;
-        this.newKeyName = '';
-        this.showCreateKey = false;
-        window.showToast(t('key_created'));
-        await this.loadKeys();
-      } catch (e) { window.showToast(e.message, 'error'); }
-    },
-
-    async deleteKey(id) {
-      if (!await window.showConfirm(t('confirm_delete_key'))) return;
-      try {
-        await api(`/api/keys/${id}`, { method: 'DELETE' });
-        window.showToast(t('key_deleted'));
-        await this.loadKeys();
-      } catch (e) { window.showToast(e.message, 'error'); }
-    },
-
-    openModelForm(model = null) {
-      if (model) {
-        this.modelForm = { id: model.id, name: model.name, protocol: model.protocol, model_patterns: model.model_patterns, base_url: model.base_url, real_api_key: model.real_api_key, priority: model.priority };
-      } else {
-        this.modelForm = { id: null, name: '', protocol: 'openai', model_patterns: '', base_url: '', real_api_key: '', priority: 0 };
-      }
-      this.showModelForm = true;
-    },
-
-    async saveModel() {
-      try {
-        if (this.modelForm.id) {
-          await api(`/api/models/${this.modelForm.id}`, { method: 'PUT', body: JSON.stringify(this.modelForm) });
-          window.showToast(t('model_updated'));
-        } else {
-          await api(`/api/orgs/${this.selectedOrg.id}/models`, { method: 'POST', body: JSON.stringify(this.modelForm) });
-          window.showToast(t('model_added'));
-        }
-        this.showModelForm = false;
-        await this.loadModels();
-      } catch (e) { window.showToast(e.message, 'error'); }
-    },
-
-    async deleteModel(id) {
-      if (!await window.showConfirm(t('confirm_delete_model'))) return;
-      try {
-        await api(`/api/models/${id}`, { method: 'DELETE' });
-        window.showToast(t('model_deleted'));
-        await this.loadModels();
-      } catch (e) { window.showToast(e.message, 'error'); }
     },
   };
 }

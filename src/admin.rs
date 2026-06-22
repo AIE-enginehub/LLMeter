@@ -7,7 +7,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use lettre::{
-    message::{Mailbox, SinglePart},
+    message::{Mailbox, MultiPart, SinglePart, Attachment, header::ContentType},
     transport::smtp::authentication::Credentials,
     AsyncSmtpTransport, AsyncTransport, Tokio1Executor,
 };
@@ -84,13 +84,22 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/orgs/{id}",
             put(update_org).delete(delete_org),
         )
-        // API Key 管理
+        // 项目管理
         .route(
-            "/api/orgs/{org_id}/keys",
+            "/api/orgs/{org_id}/projects",
+            get(list_projects).post(create_project),
+        )
+        .route(
+            "/api/projects/{id}",
+            put(update_project).delete(delete_project),
+        )
+        // API Key 管理（归属项目）
+        .route(
+            "/api/projects/{project_id}/keys",
             get(list_keys).post(create_key),
         )
         .route("/api/keys/{id}", delete(delete_key))
-        // 模型配置管理
+        // 模型配置管理（保持在组织级别）
         .route(
             "/api/orgs/{org_id}/models",
             get(list_models).post(create_model),
@@ -125,8 +134,21 @@ struct OrgRow {
     slug: String,
     credit: rust_decimal::Decimal,
     overdraft_limit: rust_decimal::Decimal,
+    credit_price: rust_decimal::Decimal,
     is_active: bool,
     total_consumed: Option<rust_decimal::Decimal>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+/// 项目（归属于组织）
+#[derive(Serialize, sqlx::FromRow)]
+struct ProjectRow {
+    id: Uuid,
+    org_id: Uuid,
+    name: String,
+    description: String,
+    is_active: bool,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -135,6 +157,7 @@ struct OrgRow {
 struct ApiKeyRow {
     id: Uuid,
     org_id: Uuid,
+    project_id: Option<Uuid>,
     name: String,
     key_prefix: String,
     is_active: bool,
@@ -170,6 +193,7 @@ struct AdminUserRow {
 struct LogRow {
     id: Uuid,
     org_id: Uuid,
+    project_id: Option<Uuid>,
     api_key_id: Uuid,
     provider: String,
     model: Option<String>,
@@ -187,6 +211,7 @@ struct LogRow {
     duration_ms: Option<i32>,
     error_message: Option<String>,
     credit_cost: Option<rust_decimal::Decimal>,
+    money_cost: Option<rust_decimal::Decimal>,
     is_long_context: bool,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -197,6 +222,7 @@ struct LogRow {
 struct LogSummaryRow {
     id: Uuid,
     org_id: Uuid,
+    project_id: Option<Uuid>,
     api_key_id: Uuid,
     provider: String,
     model: Option<String>,
@@ -212,6 +238,7 @@ struct LogSummaryRow {
     duration_ms: Option<i32>,
     error_message: Option<String>,
     credit_cost: Option<rust_decimal::Decimal>,
+    money_cost: Option<rust_decimal::Decimal>,
     is_long_context: bool,
     created_at: DateTime<Utc>,
 }
@@ -373,6 +400,7 @@ struct UpdateOrgRequest {
     slug: Option<String>,
     is_active: Option<bool>,
     overdraft_limit: Option<rust_decimal::Decimal>,
+    credit_price: Option<rust_decimal::Decimal>,
 }
 
 /// GET /api/orgs — 列出所有组织
@@ -381,7 +409,7 @@ async fn list_orgs(
     _admin: AuthAdmin,
 ) -> Result<Json<Vec<OrgRow>>, (StatusCode, Json<ErrorResponse>)> {
     let rows = sqlx::query_as::<_, OrgRow>(
-        "SELECT o.id, o.name, o.slug, o.credit, o.overdraft_limit, o.is_active, \
+        "SELECT o.id, o.name, o.slug, o.credit, o.overdraft_limit, o.credit_price, o.is_active, \
                 COALESCE((SELECT ABS(SUM(amount)) FROM credit_logs WHERE org_id = o.id AND transaction_type = 'consume'), 0) AS total_consumed, \
                 o.created_at, o.updated_at \
          FROM organizations o ORDER BY o.created_at DESC",
@@ -393,21 +421,31 @@ async fn list_orgs(
     Ok(Json(rows))
 }
 
-/// POST /api/orgs — 创建组织
+/// POST /api/orgs — 创建组织（同时自动创建默认项目）
 async fn create_org(
     State(state): State<Arc<AppState>>,
     _admin: AuthAdmin,
     Json(body): Json<CreateOrgRequest>,
 ) -> Result<(StatusCode, Json<OrgRow>), (StatusCode, Json<ErrorResponse>)> {
+    let mut tx = state.pool.begin().await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
     let row = sqlx::query_as::<_, OrgRow>(
         "INSERT INTO organizations (name, slug) VALUES ($1, $2) \
-         RETURNING id, name, slug, credit, overdraft_limit, is_active, 0::NUMERIC AS total_consumed, created_at, updated_at",
+         RETURNING id, name, slug, credit, overdraft_limit, credit_price, is_active, 0::NUMERIC AS total_consumed, created_at, updated_at",
     )
     .bind(&body.name)
     .bind(&body.slug)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(friendly_db_err)?;
+
+    sqlx::query("INSERT INTO projects (org_id, name, description) VALUES ($1, 'Default', '自动创建的默认项目')")
+        .bind(row.id)
+        .execute(&mut *tx)
+        .await
+        .map_err(friendly_db_err)?;
+
+    tx.commit().await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok((StatusCode::CREATED, Json(row)))
 }
@@ -425,9 +463,10 @@ async fn update_org(
             slug = COALESCE($3, slug), \
             is_active = COALESCE($4, is_active), \
             overdraft_limit = COALESCE($5, overdraft_limit), \
+            credit_price = COALESCE($6, credit_price), \
             updated_at = now() \
          WHERE id = $1 \
-         RETURNING id, name, slug, credit, overdraft_limit, is_active, \
+         RETURNING id, name, slug, credit, overdraft_limit, credit_price, is_active, \
                    COALESCE((SELECT ABS(SUM(amount)) FROM credit_logs WHERE org_id = id AND transaction_type = 'consume'), 0) AS total_consumed, \
                    created_at, updated_at",
     )
@@ -436,6 +475,7 @@ async fn update_org(
     .bind(&body.slug)
     .bind(body.is_active)
     .bind(body.overdraft_limit)
+    .bind(body.credit_price)
     .fetch_optional(&state.pool)
     .await
     .map_err(friendly_db_err)?
@@ -464,7 +504,111 @@ async fn delete_org(
 }
 
 // ============================================================
-// API Key 管理
+// 项目管理 API
+// ============================================================
+
+#[derive(Deserialize)]
+struct CreateProjectRequest {
+    name: String,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateProjectRequest {
+    name: Option<String>,
+    description: Option<String>,
+    is_active: Option<bool>,
+}
+
+/// GET /api/orgs/:org_id/projects — 列出组织下的所有项目
+async fn list_projects(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+    Path(org_id): Path<Uuid>,
+) -> Result<Json<Vec<ProjectRow>>, (StatusCode, Json<ErrorResponse>)> {
+    let rows = sqlx::query_as::<_, ProjectRow>(
+        "SELECT id, org_id, name, description, is_active, created_at, updated_at \
+         FROM projects WHERE org_id = $1 ORDER BY created_at ASC",
+    )
+    .bind(org_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(rows))
+}
+
+/// POST /api/orgs/:org_id/projects — 创建项目
+async fn create_project(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+    Path(org_id): Path<Uuid>,
+    Json(body): Json<CreateProjectRequest>,
+) -> Result<(StatusCode, Json<ProjectRow>), (StatusCode, Json<ErrorResponse>)> {
+    let row = sqlx::query_as::<_, ProjectRow>(
+        "INSERT INTO projects (org_id, name, description) VALUES ($1, $2, $3) \
+         RETURNING id, org_id, name, description, is_active, created_at, updated_at",
+    )
+    .bind(org_id)
+    .bind(&body.name)
+    .bind(&body.description)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(friendly_db_err)?;
+
+    Ok((StatusCode::CREATED, Json(row)))
+}
+
+/// PUT /api/projects/:id — 更新项目
+async fn update_project(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<UpdateProjectRequest>,
+) -> Result<Json<ProjectRow>, (StatusCode, Json<ErrorResponse>)> {
+    let row = sqlx::query_as::<_, ProjectRow>(
+        "UPDATE projects SET \
+            name = COALESCE($2, name), \
+            description = COALESCE($3, description), \
+            is_active = COALESCE($4, is_active), \
+            updated_at = now() \
+         WHERE id = $1 \
+         RETURNING id, org_id, name, description, is_active, created_at, updated_at",
+    )
+    .bind(id)
+    .bind(&body.name)
+    .bind(&body.description)
+    .bind(body.is_active)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(friendly_db_err)?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "项目不存在"))?;
+
+    Ok(Json(row))
+}
+
+/// DELETE /api/projects/:id — 删除项目
+async fn delete_project(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let result = sqlx::query("DELETE FROM projects WHERE id = $1")
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .map_err(friendly_db_err)?;
+
+    if result.rows_affected() == 0 {
+        return Err(err(StatusCode::NOT_FOUND, "项目不存在"));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ============================================================
+// API Key 管理（归属项目）
 // ============================================================
 
 #[derive(Deserialize)]
@@ -482,17 +626,17 @@ struct CreateKeyResponse {
     created_at: DateTime<Utc>,
 }
 
-/// GET /api/orgs/:org_id/keys — 列出组织的所有 API Key
+/// GET /api/projects/:project_id/keys — 列出项目下的所有 API Key
 async fn list_keys(
     State(state): State<Arc<AppState>>,
     _admin: AuthAdmin,
-    Path(org_id): Path<Uuid>,
+    Path(project_id): Path<Uuid>,
 ) -> Result<Json<Vec<ApiKeyRow>>, (StatusCode, Json<ErrorResponse>)> {
     let rows = sqlx::query_as::<_, ApiKeyRow>(
-        "SELECT id, org_id, name, key_prefix, is_active, last_used_at, created_at \
-         FROM api_keys WHERE org_id = $1 ORDER BY created_at DESC",
+        "SELECT id, org_id, project_id, name, key_prefix, is_active, last_used_at, created_at \
+         FROM api_keys WHERE project_id = $1 ORDER BY created_at DESC",
     )
-    .bind(org_id)
+    .bind(project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -500,24 +644,32 @@ async fn list_keys(
     Ok(Json(rows))
 }
 
-/// POST /api/orgs/:org_id/keys — 创建 API Key
+/// POST /api/projects/:project_id/keys — 在项目下创建 API Key
 /// Key 格式: gc-{slug}-{24 hex}，前缀包含组织 slug 便于识别归属
 async fn create_key(
     State(state): State<Arc<AppState>>,
     _admin: AuthAdmin,
-    Path(org_id): Path<Uuid>,
+    Path(project_id): Path<Uuid>,
     Json(body): Json<CreateKeyRequest>,
 ) -> Result<(StatusCode, Json<CreateKeyResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let slug: String = sqlx::query_scalar("SELECT slug FROM organizations WHERE id = $1")
-        .bind(org_id)
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|_| err(StatusCode::NOT_FOUND, "Organization not found"))?;
+    #[derive(sqlx::FromRow)]
+    struct ProjectOrg {
+        org_id: Uuid,
+        slug: String,
+    }
+
+    let po = sqlx::query_as::<_, ProjectOrg>(
+        "SELECT p.org_id, o.slug FROM projects p JOIN organizations o ON o.id = p.org_id WHERE p.id = $1",
+    )
+    .bind(project_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "项目不存在"))?;
 
     let raw_uuid = Uuid::new_v4().to_string().replace('-', "");
-    let raw_key = format!("gc-{}-{}", slug, &raw_uuid[..24]);
-
-    let key_prefix = format!("gc-{}-", slug);
+    let raw_key = format!("gc-{}-{}", po.slug, &raw_uuid[..24]);
+    let key_prefix = format!("gc-{}-", po.slug);
 
     let mut hasher = Sha256::new();
     hasher.update(raw_key.as_bytes());
@@ -530,10 +682,11 @@ async fn create_key(
     }
 
     let row = sqlx::query_as::<_, InsertedKey>(
-        "INSERT INTO api_keys (org_id, name, key_hash, key_prefix) VALUES ($1, $2, $3, $4) \
+        "INSERT INTO api_keys (org_id, project_id, name, key_hash, key_prefix) VALUES ($1, $2, $3, $4, $5) \
          RETURNING id, created_at",
     )
-    .bind(org_id)
+    .bind(po.org_id)
+    .bind(project_id)
     .bind(&body.name)
     .bind(&key_hash)
     .bind(&key_prefix)
@@ -709,6 +862,7 @@ struct LogQuery {
     #[serde(rename = "pageSize")]
     page_size: Option<i64>,
     org_id: Option<Uuid>,
+    project_id: Option<Uuid>,
     api_key_id: Option<Uuid>,
     model: Option<String>,
     status: Option<String>,
@@ -740,6 +894,10 @@ async fn list_logs(
 
     if q.org_id.is_some() {
         conditions.push(format!("org_id = ${param_idx}"));
+        param_idx += 1;
+    }
+    if q.project_id.is_some() {
+        conditions.push(format!("project_id = ${param_idx}"));
         param_idx += 1;
     }
     if q.api_key_id.is_some() {
@@ -778,24 +936,13 @@ async fn list_logs(
     // 查询总数
     let count_sql = format!("SELECT COUNT(*) as count FROM request_logs {where_clause}");
     let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
-    if let Some(ref v) = q.org_id {
-        count_query = count_query.bind(v);
-    }
-    if let Some(ref v) = q.api_key_id {
-        count_query = count_query.bind(v);
-    }
-    if let Some(ref v) = q.model {
-        count_query = count_query.bind(format!("%{v}%"));
-    }
-    if let Some(ref v) = q.status {
-        count_query = count_query.bind(v);
-    }
-    if let Some(ref v) = start_ts {
-        count_query = count_query.bind(v);
-    }
-    if let Some(ref v) = end_ts {
-        count_query = count_query.bind(v);
-    }
+    if let Some(ref v) = q.org_id { count_query = count_query.bind(v); }
+    if let Some(ref v) = q.project_id { count_query = count_query.bind(v); }
+    if let Some(ref v) = q.api_key_id { count_query = count_query.bind(v); }
+    if let Some(ref v) = q.model { count_query = count_query.bind(format!("%{v}%")); }
+    if let Some(ref v) = q.status { count_query = count_query.bind(v); }
+    if let Some(ref v) = start_ts { count_query = count_query.bind(v); }
+    if let Some(ref v) = end_ts { count_query = count_query.bind(v); }
 
     let total = count_query
         .fetch_one(&state.pool)
@@ -804,10 +951,10 @@ async fn list_logs(
 
     // 查询数据
     let data_sql = format!(
-        "SELECT id, org_id, api_key_id, provider, model, path, method, is_stream, \
+        "SELECT id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, \
                 response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
                 (COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0) + COALESCE(cached_tokens, 0)) AS total_tokens, \
-                duration_ms, error_message, credit_cost, is_long_context, created_at \
+                duration_ms, error_message, credit_cost, money_cost, is_long_context, created_at \
          FROM request_logs {where_clause} \
          ORDER BY created_at DESC \
          LIMIT ${param_idx} OFFSET ${}",
@@ -815,24 +962,13 @@ async fn list_logs(
     );
 
     let mut data_query = sqlx::query_as::<_, LogSummaryRow>(&data_sql);
-    if let Some(ref v) = q.org_id {
-        data_query = data_query.bind(v);
-    }
-    if let Some(ref v) = q.api_key_id {
-        data_query = data_query.bind(v);
-    }
-    if let Some(ref v) = q.model {
-        data_query = data_query.bind(format!("%{v}%"));
-    }
-    if let Some(ref v) = q.status {
-        data_query = data_query.bind(v);
-    }
-    if let Some(ref v) = start_ts {
-        data_query = data_query.bind(v);
-    }
-    if let Some(ref v) = end_ts {
-        data_query = data_query.bind(v);
-    }
+    if let Some(ref v) = q.org_id { data_query = data_query.bind(v); }
+    if let Some(ref v) = q.project_id { data_query = data_query.bind(v); }
+    if let Some(ref v) = q.api_key_id { data_query = data_query.bind(v); }
+    if let Some(ref v) = q.model { data_query = data_query.bind(format!("%{v}%")); }
+    if let Some(ref v) = q.status { data_query = data_query.bind(v); }
+    if let Some(ref v) = start_ts { data_query = data_query.bind(v); }
+    if let Some(ref v) = end_ts { data_query = data_query.bind(v); }
     data_query = data_query.bind(page_size).bind(offset);
 
     let data = data_query
@@ -855,10 +991,10 @@ async fn get_log(
     Path(id): Path<Uuid>,
 ) -> Result<Json<LogRow>, (StatusCode, Json<ErrorResponse>)> {
     let row = sqlx::query_as::<_, LogRow>(
-        "SELECT id, org_id, api_key_id, provider, model, path, method, is_stream, \
+        "SELECT id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, \
                 request_body, response_body, response_status, status, \
                 prompt_tokens, completion_tokens, cached_tokens, total_tokens, \
-                duration_ms, error_message, credit_cost, is_long_context, created_at, updated_at \
+                duration_ms, error_message, credit_cost, money_cost, is_long_context, created_at, updated_at \
          FROM request_logs WHERE id = $1",
     )
     .bind(id)
@@ -962,16 +1098,21 @@ struct ExportUsageReportResponse {
     start_time: DateTime<Utc>,
     end_time: DateTime<Utc>,
     org_count: usize,
-    summary_count: usize,
     total_requests: i64,
     total_credit_cost: f64,
+    total_money_cost: f64,
 }
 
+/// 按组织+项目维度的汇总行
 #[derive(sqlx::FromRow)]
-struct UsageReportSummaryRow {
+struct UsageReportDetailRow {
     org_name: String,
+    project_name: Option<String>,
+    #[allow(dead_code)]
+    credit_price: f64,
     request_count: i64,
     total_credit_cost: f64,
+    total_money_cost: f64,
 }
 
 /// POST /api/usage/export_report
@@ -996,15 +1137,19 @@ async fn export_usage_report(
     let mail_settings = crate::db::get_mail_settings(&state.pool).await;
     validate_mail_settings(&mail_settings)?;
 
-    let summaries = sqlx::query_as::<_, UsageReportSummaryRow>(
+    let details = sqlx::query_as::<_, UsageReportDetailRow>(
         "SELECT o.name AS org_name, \
+                p.name AS project_name, \
+                COALESCE(o.credit_price::FLOAT8, 0) AS credit_price, \
                 COUNT(*)::BIGINT AS request_count, \
-                COALESCE(SUM(r.credit_cost)::FLOAT8, 0) AS total_credit_cost \
+                COALESCE(SUM(r.credit_cost)::FLOAT8, 0) AS total_credit_cost, \
+                COALESCE(SUM(r.money_cost)::FLOAT8, 0) AS total_money_cost \
          FROM request_logs r \
          JOIN organizations o ON o.id = r.org_id \
+         LEFT JOIN projects p ON p.id = r.project_id \
          WHERE r.org_id = ANY($1) AND r.created_at >= $2 AND r.created_at < $3 \
-         GROUP BY o.name \
-         ORDER BY o.name",
+         GROUP BY o.name, p.name, o.credit_price \
+         ORDER BY o.name, p.name",
     )
     .bind(&body.org_ids)
     .bind(start_time)
@@ -1013,21 +1158,59 @@ async fn export_usage_report(
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let total_requests: i64 = summaries.iter().map(|s| s.request_count).sum();
-    let total_credit_cost: f64 = summaries.iter().map(|s| s.total_credit_cost).sum();
-    let report_html = build_usage_report_html(
-        start_time,
-        end_time,
-        &summaries,
-        total_requests,
-        total_credit_cost,
-    );
+    // 按组织分组
+    let mut org_groups: Vec<(String, Vec<&UsageReportDetailRow>)> = Vec::new();
+    for row in &details {
+        if let Some(group) = org_groups.iter_mut().find(|(name, _)| name == &row.org_name) {
+            group.1.push(row);
+        } else {
+            org_groups.push((row.org_name.clone(), vec![row]));
+        }
+    }
+
+    let period_start = start_time.format("%Y-%m-%d").to_string();
+    let period_end = (end_time - chrono::TimeDelta::seconds(1)).format("%Y-%m-%d").to_string();
+    let generated_at = chrono::Utc::now().format("%Y-%m-%d %H:%M").to_string();
+    let period_tag = format!("{}_{}", start_time.format("%Y%m%d"), (end_time - chrono::TimeDelta::seconds(1)).format("%Y%m%d"));
+
+    // 为每个组织生成独立 PDF
+    let mut pdf_attachments: Vec<PdfAttachment> = Vec::new();
+    let mut total_requests: i64 = 0;
+    let mut total_credit_cost: f64 = 0.0;
+    let mut total_money_cost: f64 = 0.0;
+
+    for (org_name, rows) in &org_groups {
+        let bill_no = generate_bill_no();
+        let projects: Vec<(Option<String>, i64, f64, f64)> = rows.iter()
+            .map(|r| (r.project_name.clone(), r.request_count, r.total_credit_cost, r.total_money_cost))
+            .collect();
+        let org_requests: i64 = rows.iter().map(|r| r.request_count).sum();
+        let org_credit: f64 = rows.iter().map(|r| r.total_credit_cost).sum();
+        let org_money: f64 = rows.iter().map(|r| r.total_money_cost).sum();
+
+        total_requests += org_requests;
+        total_credit_cost += org_credit;
+        total_money_cost += org_money;
+
+        let pdf_data = generate_org_invoice_pdf(
+            &bill_no, &period_start, &period_end, &generated_at,
+            org_name, &projects, org_requests, org_credit, org_money,
+        ).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+        let filename = format!("LLMeter账单_{org_name}_{period_tag}.pdf");
+        pdf_attachments.push(PdfAttachment { filename, data: pdf_data });
+    }
+
+    if pdf_attachments.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "所选时间段内无使用记录"));
+    }
+
     send_usage_report_mail(
         &mail_settings,
         body.recipient_email.trim(),
         start_time,
         end_time,
-        &report_html,
+        &pdf_attachments,
     )
     .await?;
 
@@ -1036,9 +1219,9 @@ async fn export_usage_report(
         start_time,
         end_time,
         org_count: body.org_ids.len(),
-        summary_count: summaries.len(),
         total_requests,
         total_credit_cost,
+        total_money_cost,
     }))
 }
 
@@ -1121,82 +1304,175 @@ fn validate_mail_settings(
     Ok(())
 }
 
-fn build_usage_report_html(
-    start_time: DateTime<Utc>,
-    end_time: DateTime<Utc>,
-    summaries: &[UsageReportSummaryRow],
-    total_requests: i64,
-    total_credit_cost: f64,
-) -> String {
-    let mut rows = String::new();
-    for row in summaries {
-        rows.push_str(&format!(
-            "<tr>\
-                <td style=\"padding:10px;border:1px solid #e5e7eb;\">{}</td>\
-                <td style=\"padding:10px;border:1px solid #e5e7eb;text-align:right;\">{}</td>\
-                <td style=\"padding:10px;border:1px solid #e5e7eb;text-align:right;\">{:.4}</td>\
-            </tr>",
-            html_escape(&row.org_name),
-            row.request_count,
-            row.total_credit_cost,
-        ));
-    }
+/// 内嵌的霞鹜新晰黑字体（静态 TTF 黑体，编译时打包，无运行时依赖）
+static EMBEDDED_FONT: &[u8] = include_bytes!("../fonts/LXGWNeoXiHei.ttf");
 
-    if rows.is_empty() {
-        rows.push_str(
-            "<tr><td colspan=\"3\" style=\"padding:12px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;\">该时间段无数据</td></tr>",
-        );
-    }
-
-    format!(
-        "<!doctype html>
-<html>
-<body style=\"margin:0;padding:24px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif;color:#111827;\">
-  <div style=\"max-width:760px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;\">
-    <div style=\"padding:20px 24px;background:linear-gradient(135deg,#1e293b,#334155);color:#ffffff;\">
-      <h2 style=\"margin:0;font-size:20px;\">LLMeter Credit 使用汇总报表</h2>
-      <p style=\"margin:8px 0 0 0;font-size:13px;opacity:.9;\">时间范围：{} ~ {}</p>
-    </div>
-    <div style=\"padding:20px 24px;\">
-      <div style=\"display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;\">
-        <div style=\"background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;min-width:160px;\">
-          <div style=\"font-size:12px;color:#64748b;\">总调用次数</div>
-          <div style=\"font-size:20px;font-weight:700;margin-top:4px;\">{}</div>
-        </div>
-        <div style=\"background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;min-width:160px;\">
-          <div style=\"font-size:12px;color:#64748b;\">总 Credit 用量</div>
-          <div style=\"font-size:20px;font-weight:700;margin-top:4px;color:#4f46e5;\">{:.4}</div>
-        </div>
-      </div>
-      <table style=\"width:100%;border-collapse:collapse;border:1px solid #e5e7eb;\">
-        <thead>
-          <tr style=\"background:#f8fafc;\">
-            <th style=\"padding:10px;border:1px solid #e5e7eb;text-align:left;font-size:13px;color:#475569;\">组织</th>
-            <th style=\"padding:10px;border:1px solid #e5e7eb;text-align:right;font-size:13px;color:#475569;\">调用次数</th>
-            <th style=\"padding:10px;border:1px solid #e5e7eb;text-align:right;font-size:13px;color:#475569;\">Credit 用量</th>
-          </tr>
-        </thead>
-        <tbody>{}</tbody>
-      </table>
-      <p style=\"margin:14px 0 0 0;font-size:12px;color:#94a3b8;\">此邮件由 LLMeter 自动发送。</p>
-    </div>
-  </div>
-</body>
-</html>",
-        start_time.format("%Y-%m-%d %H:%M:%S"),
-        (end_time - chrono::TimeDelta::seconds(1)).format("%Y-%m-%d %H:%M:%S"),
-        total_requests,
-        total_credit_cost,
-        rows
-    )
+fn generate_bill_no() -> String {
+    let ts = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+    let r: u32 = rand::random::<u32>() % 10000;
+    format!("LLM-{ts}-{r:04}")
 }
 
-fn html_escape(v: &str) -> String {
-    v.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
+struct PdfAttachment {
+    filename: String,
+    data: Vec<u8>,
+}
+
+/// 对内嵌字体做子集化，只保留 `text` 中出现的字符，大幅减小 PDF 体积
+fn subset_font(text: &str) -> Result<Vec<u8>, String> {
+    use std::collections::BTreeSet;
+    let reader = font_subset::FontReader::new(EMBEDDED_FONT)
+        .map_err(|e| format!("字体读取失败: {e}"))?;
+    let font = reader.read()
+        .map_err(|e| format!("字体解析失败: {e}"))?;
+    let chars: BTreeSet<char> = text.chars().collect();
+    let subset = font.subset(&chars)
+        .map_err(|e| format!("字体子集化失败: {e}"))?;
+    Ok(subset.to_opentype())
+}
+
+/// 生成单个组织的账单 PDF（字体按需子集化，体积小、速度快）
+fn generate_org_invoice_pdf(
+    bill_no: &str,
+    period_start: &str,
+    period_end: &str,
+    generated_at: &str,
+    org_name: &str,
+    projects: &[(Option<String>, i64, f64, f64)],
+    total_requests: i64,
+    total_credit: f64,
+    total_money: f64,
+) -> Result<Vec<u8>, String> {
+    use printpdf::*;
+
+    // ── 预先收集所有文本，用于字体子集化 ──
+    let mut all_text = String::new();
+    all_text.push_str("LLMeter 账单");
+    all_text.push_str(&format!("账单编号：{bill_no}"));
+    all_text.push_str(&format!("账单周期：{period_start} ～ {period_end}"));
+    all_text.push_str(&format!("生成时间：{generated_at}"));
+    all_text.push_str(&format!("组织：{org_name}"));
+    all_text.push_str("总调用次数Credit 用量应付金额");
+    all_text.push_str(&format!("{total_requests}{total_credit:.2}¥{total_money:.2}"));
+    all_text.push_str("项目调用次数Credit金额 (¥)");
+    for (name, reqs, credit, money) in projects {
+        all_text.push_str(name.as_deref().unwrap_or("(未分配)"));
+        all_text.push_str(&format!("{reqs}{credit:.2}{money:.2}"));
+    }
+    all_text.push_str("合计");
+    all_text.push_str("此账单由 LLMeter 系统自动生成，如有疑问请联系管理员。");
+
+    let font_data = subset_font(&all_text)?;
+
+    let (doc, page1, layer1) = PdfDocument::new("LLMeter Invoice", Mm(210.0), Mm(297.0), "Layer 1");
+    let font = doc.add_external_font(&mut std::io::Cursor::new(&font_data))
+        .map_err(|e| format!("子集字体加载失败: {e}"))?;
+
+    let layer = doc.get_page(page1).get_layer(layer1);
+
+    let lx: f32 = 28.0;
+    let rx: f32 = 182.0;
+    let c2: f32 = 98.0;
+    let c3: f32 = 132.0;
+    let c4: f32 = 162.0;
+    let mut y: f32 = 270.0;
+
+    macro_rules! text {
+        ($t:expr, $sz:expr, $x:expr, $yy:expr) => {
+            layer.use_text($t, $sz, Mm($x), Mm($yy), &font);
+        };
+    }
+    macro_rules! hline {
+        ($yy:expr, $th:expr, $g:expr) => {
+            layer.set_outline_color(Color::Greyscale(Greyscale::new($g, None)));
+            layer.set_outline_thickness($th);
+            layer.add_line(Line {
+                points: vec![
+                    (Point::new(Mm(lx), Mm($yy)), false),
+                    (Point::new(Mm(rx), Mm($yy)), false),
+                ],
+                is_closed: false,
+            });
+        };
+    }
+    macro_rules! fill {
+        ($g:expr) => {
+            layer.set_fill_color(Color::Greyscale(Greyscale::new($g, None)));
+        };
+    }
+
+    // ── 标题 ──
+    fill!(0.0);
+    text!("LLMeter 账单", 22.0, lx, y);
+    y -= 16.0;
+
+    // ── 账单信息 ──
+    fill!(0.25);
+    text!(&format!("账单编号：{bill_no}"), 9.0, lx, y);
+    text!(&format!("账单周期：{period_start} ～ {period_end}"), 9.0, 108.0, y);
+    y -= 5.5;
+    text!(&format!("生成时间：{generated_at}"), 9.0, lx, y);
+    fill!(0.0);
+    text!(&format!("组织：{org_name}"), 9.0, 108.0, y);
+    y -= 8.0;
+
+    // ── 分割线 ──
+    hline!(y, 0.6, 0.7);
+    y -= 14.0;
+
+    // ── 汇总区 ──
+    fill!(0.3);
+    text!("总调用次数", 8.0, lx, y + 6.0);
+    text!("Credit 用量", 8.0, 78.0, y + 6.0);
+    text!("应付金额", 8.0, 138.0, y + 6.0);
+    fill!(0.0);
+    text!(&total_requests.to_string(), 18.0, lx, y - 5.0);
+    text!(&format!("{total_credit:.2}"), 18.0, 78.0, y - 5.0);
+    text!(&format!("¥{total_money:.2}"), 18.0, 138.0, y - 5.0);
+    y -= 22.0;
+
+    // ── 分割线 ──
+    hline!(y, 0.6, 0.7);
+    y -= 12.0;
+
+    // ── 表头 ──
+    fill!(0.2);
+    text!("项目", 9.0, lx, y);
+    text!("调用次数", 9.0, c2, y);
+    text!("Credit", 9.0, c3, y);
+    text!("金额 (¥)", 9.0, c4, y);
+    y -= 3.5;
+    hline!(y, 0.4, 0.6);
+    y -= 8.0;
+
+    // ── 数据行 ──
+    fill!(0.05);
+    for (name, reqs, credit, money) in projects {
+        let name = name.as_deref().unwrap_or("(未分配)");
+        text!(name, 10.0, lx, y);
+        text!(&reqs.to_string(), 10.0, c2, y);
+        text!(&format!("{credit:.2}"), 10.0, c3, y);
+        text!(&format!("{money:.2}"), 10.0, c4, y);
+        y -= 7.5;
+    }
+
+    // ── 合计粗线 ──
+    y += 3.0;
+    hline!(y, 1.2, 0.0);
+    y -= 9.0;
+
+    // ── 合计行 ──
+    fill!(0.0);
+    text!("合计", 11.0, lx, y);
+    text!(&total_requests.to_string(), 11.0, c2, y);
+    text!(&format!("{total_credit:.2}"), 11.0, c3, y);
+    text!(&format!("¥{total_money:.2}"), 11.0, c4, y);
+
+    // ── 脚注 ──
+    fill!(0.4);
+    text!("此账单由 LLMeter 系统自动生成，如有疑问请联系管理员。", 7.0, lx, 30.0);
+
+    doc.save_to_bytes().map_err(|e| format!("PDF 保存失败: {e}"))
 }
 
 async fn send_usage_report_mail(
@@ -1204,7 +1480,7 @@ async fn send_usage_report_mail(
     recipient_email: &str,
     start_time: DateTime<Utc>,
     end_time: DateTime<Utc>,
-    html_content: &str,
+    attachments: &[PdfAttachment],
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
     let sender = if settings.outbound.sender_name.trim().is_empty() {
         settings.outbound.sender_email.clone()
@@ -1224,16 +1500,30 @@ async fn send_usage_report_mail(
         .map_err(|_| err(StatusCode::BAD_REQUEST, "收件邮箱格式无效"))?;
 
     let subject = format!(
-        "LLMeter Credit 使用报表 {} - {}",
+        "LLMeter 账单 {} - {}",
         start_time.format("%Y-%m-%d"),
         (end_time - chrono::TimeDelta::seconds(1)).format("%Y-%m-%d")
     );
+
+    let att_count = attachments.len();
+    let body_text = format!("请查收附件中的 LLMeter 使用账单（共 {att_count} 份）。");
+
+    let mut mp = MultiPart::mixed()
+        .singlepart(SinglePart::plain(body_text));
+
+    for att in attachments {
+        let ct: ContentType = "application/pdf".parse().unwrap();
+        mp = mp.singlepart(
+            Attachment::new(att.filename.clone())
+                .body(att.data.clone(), ct)
+        );
+    }
 
     let email = lettre::Message::builder()
         .from(from_mailbox)
         .to(to_mailbox)
         .subject(subject)
-        .singlepart(SinglePart::html(html_content.to_string()))
+        .multipart(mp)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut transport_builder = if settings.outbound.use_tls {
@@ -1275,7 +1565,7 @@ async fn recharge_credit(
 
     let row = sqlx::query_as::<_, OrgRow>(
         "UPDATE organizations SET credit = credit + $1, updated_at = now() WHERE id = $2 \
-         RETURNING id, name, slug, credit, overdraft_limit, is_active, \
+         RETURNING id, name, slug, credit, overdraft_limit, credit_price, is_active, \
                    COALESCE((SELECT ABS(SUM(amount)) FROM credit_logs WHERE org_id = id AND transaction_type = 'consume'), 0) AS total_consumed, \
                    created_at, updated_at"
     )
@@ -1369,6 +1659,7 @@ struct CreditLogPage {
 struct StatsQuery {
     days: Option<i32>,
     org_id: Option<Uuid>,
+    project_id: Option<Uuid>,
     api_key_id: Option<Uuid>,
     model: Option<String>,
     start_time: Option<String>,
@@ -1379,6 +1670,7 @@ struct StatsQuery {
 struct StatsResponse {
     overview: StatsOverview,
     by_org: Vec<OrgStats>,
+    by_project: Vec<ProjectStats>,
     by_model: Vec<ModelStats>,
     daily_stats: Vec<DailyStats>,
 }
@@ -1399,6 +1691,20 @@ struct StatsOverview {
 #[derive(Serialize, sqlx::FromRow)]
 struct OrgStats {
     org_id: Uuid,
+    org_name: String,
+    request_count: i64,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    cached_tokens: i64,
+    total_tokens: i64,
+    total_credit_cost: f64,
+    error_count: i64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct ProjectStats {
+    project_id: Option<Uuid>,
+    project_name: String,
     org_name: String,
     request_count: i64,
     prompt_tokens: i64,
@@ -1462,6 +1768,10 @@ async fn get_stats(
         extra_where += &format!(" AND org_id = ${param_idx}");
         param_idx += 1;
     }
+    if q.project_id.is_some() {
+        extra_where += &format!(" AND project_id = ${param_idx}");
+        param_idx += 1;
+    }
     if q.api_key_id.is_some() {
         extra_where += &format!(" AND api_key_id = ${param_idx}");
         param_idx += 1;
@@ -1478,6 +1788,7 @@ async fn get_stats(
             let mut q_inner = $query;
             if let Some(ref u) = until { q_inner = q_inner.bind(u); }
             if let Some(ref oid) = q.org_id { q_inner = q_inner.bind(oid); }
+            if let Some(ref pid) = q.project_id { q_inner = q_inner.bind(pid); }
             if let Some(ref kid) = q.api_key_id { q_inner = q_inner.bind(kid); }
             if let Some(ref mp) = model_pattern { q_inner = q_inner.bind(mp); }
             q_inner
@@ -1524,6 +1835,31 @@ async fn get_stats(
         .fetch_all(&state.pool).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    // 按项目
+    let proj_extra = extra_where.replace("created_at", "r.created_at")
+        .replace("org_id", "r.org_id")
+        .replace("project_id", "r.project_id")
+        .replace("api_key_id", "r.api_key_id")
+        .replace("model", "r.model");
+    let proj_sql = format!(
+        "SELECT r.project_id, COALESCE(p.name, 'unknown') AS project_name, COALESCE(o.name, 'unknown') AS org_name, \
+            COUNT(*)::BIGINT AS request_count, \
+            COALESCE(SUM(r.prompt_tokens), 0)::BIGINT AS prompt_tokens, \
+            COALESCE(SUM(r.completion_tokens), 0)::BIGINT AS completion_tokens, \
+            COALESCE(SUM(r.cached_tokens), 0)::BIGINT AS cached_tokens, \
+            (COALESCE(SUM(r.prompt_tokens), 0) + COALESCE(SUM(r.completion_tokens), 0) + COALESCE(SUM(r.cached_tokens), 0))::BIGINT AS total_tokens, \
+            COALESCE(SUM(r.credit_cost)::FLOAT8, 0) AS total_credit_cost, \
+            COUNT(*) FILTER (WHERE r.status = 'error')::BIGINT AS error_count \
+         FROM request_logs r \
+         LEFT JOIN projects p ON r.project_id = p.id \
+         LEFT JOIN organizations o ON r.org_id = o.id \
+         WHERE r.created_at >= $1 {proj_extra} \
+         GROUP BY r.project_id, p.name, o.name ORDER BY request_count DESC"
+    );
+    let by_project = bind_filters!(sqlx::query_as::<_, ProjectStats>(&proj_sql).bind(since))
+        .fetch_all(&state.pool).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
     // 按 model
     let model_sql = format!(
         "SELECT COALESCE(model, 'unknown') AS model, \
@@ -1558,5 +1894,5 @@ async fn get_stats(
         .fetch_all(&state.pool).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(StatsResponse { overview, by_org, by_model, daily_stats }))
+    Ok(Json(StatsResponse { overview, by_org, by_project, by_model, daily_stats }))
 }
