@@ -1,5 +1,6 @@
 mod admin;
 mod auth;
+mod compress;
 mod db;
 mod open_api;
 mod protocol;

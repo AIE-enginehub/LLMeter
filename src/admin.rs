@@ -100,6 +100,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/stats", get(get_stats))
         // 积分系统
         .route("/api/settings/credit_rates", get(get_credit_rates).put(update_credit_rates))
+        .route("/api/settings/compression", get(get_compression).put(update_compression))
         .route("/api/orgs/{id}/credit", post(recharge_credit))
         .route("/api/orgs/{id}/credit_logs", get(list_credit_logs))
 }
@@ -143,6 +144,7 @@ struct ModelConfigRow {
     real_api_key: String,
     priority: i32,
     is_active: bool,
+    compression_enabled: Option<bool>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -178,6 +180,11 @@ struct LogRow {
     error_message: Option<String>,
     credit_cost: Option<rust_decimal::Decimal>,
     is_long_context: bool,
+    compressed: bool,
+    compression_mode: Option<String>,
+    original_prompt_chars: Option<i32>,
+    forwarded_prompt_chars: Option<i32>,
+    est_tokens_saved: Option<i32>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -203,6 +210,8 @@ struct LogSummaryRow {
     error_message: Option<String>,
     credit_cost: Option<rust_decimal::Decimal>,
     is_long_context: bool,
+    compressed: bool,
+    est_tokens_saved: Option<i32>,
     created_at: DateTime<Utc>,
 }
 
@@ -574,6 +583,7 @@ struct CreateModelRequest {
     base_url: String,
     real_api_key: String,
     priority: Option<i32>,
+    compression_enabled: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -585,6 +595,7 @@ struct UpdateModelRequest {
     real_api_key: Option<String>,
     priority: Option<i32>,
     is_active: Option<bool>,
+    compression_enabled: Option<bool>,
 }
 
 /// GET /api/orgs/:org_id/models — 列出组织的模型配置
@@ -595,7 +606,7 @@ async fn list_models(
 ) -> Result<Json<Vec<ModelConfigRow>>, (StatusCode, Json<ErrorResponse>)> {
     let rows = sqlx::query_as::<_, ModelConfigRow>(
         "SELECT id, org_id, name, protocol, model_patterns, base_url, real_api_key, \
-                priority, is_active, created_at, updated_at \
+                priority, is_active, compression_enabled, created_at, updated_at \
          FROM model_configs WHERE org_id = $1 ORDER BY priority DESC, created_at DESC",
     )
     .bind(org_id)
@@ -614,10 +625,10 @@ async fn create_model(
     Json(body): Json<CreateModelRequest>,
 ) -> Result<(StatusCode, Json<ModelConfigRow>), (StatusCode, Json<ErrorResponse>)> {
     let row = sqlx::query_as::<_, ModelConfigRow>(
-        "INSERT INTO model_configs (org_id, name, protocol, model_patterns, base_url, real_api_key, priority) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7) \
+        "INSERT INTO model_configs (org_id, name, protocol, model_patterns, base_url, real_api_key, priority, compression_enabled) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
          RETURNING id, org_id, name, protocol, model_patterns, base_url, real_api_key, \
-                   priority, is_active, created_at, updated_at",
+                   priority, is_active, compression_enabled, created_at, updated_at",
     )
     .bind(org_id)
     .bind(&body.name)
@@ -626,6 +637,7 @@ async fn create_model(
     .bind(&body.base_url)
     .bind(&body.real_api_key)
     .bind(body.priority.unwrap_or(0))
+    .bind(body.compression_enabled)
     .fetch_one(&state.pool)
     .await
     .map_err(friendly_db_err)?;
@@ -649,10 +661,11 @@ async fn update_model(
             real_api_key = COALESCE($6, real_api_key), \
             priority = COALESCE($7, priority), \
             is_active = COALESCE($8, is_active), \
+            compression_enabled = COALESCE($9, compression_enabled), \
             updated_at = now() \
          WHERE id = $1 \
          RETURNING id, org_id, name, protocol, model_patterns, base_url, real_api_key, \
-                   priority, is_active, created_at, updated_at",
+                   priority, is_active, compression_enabled, created_at, updated_at",
     )
     .bind(id)
     .bind(&body.name)
@@ -662,6 +675,7 @@ async fn update_model(
     .bind(&body.real_api_key)
     .bind(body.priority)
     .bind(body.is_active)
+    .bind(body.compression_enabled)
     .fetch_optional(&state.pool)
     .await
     .map_err(friendly_db_err)?
@@ -797,7 +811,7 @@ async fn list_logs(
         "SELECT id, org_id, api_key_id, provider, model, path, method, is_stream, \
                 response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
                 (COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0) + COALESCE(cached_tokens, 0)) AS total_tokens, \
-                duration_ms, error_message, credit_cost, is_long_context, created_at \
+                duration_ms, error_message, credit_cost, is_long_context, compressed, est_tokens_saved, created_at \
          FROM request_logs {where_clause} \
          ORDER BY created_at DESC \
          LIMIT ${param_idx} OFFSET ${}",
@@ -848,7 +862,9 @@ async fn get_log(
         "SELECT id, org_id, api_key_id, provider, model, path, method, is_stream, \
                 request_body, response_body, response_status, status, \
                 prompt_tokens, completion_tokens, cached_tokens, total_tokens, \
-                duration_ms, error_message, credit_cost, is_long_context, created_at, updated_at \
+                duration_ms, error_message, credit_cost, is_long_context, \
+                compressed, compression_mode, original_prompt_chars, forwarded_prompt_chars, est_tokens_saved, \
+                created_at, updated_at \
          FROM request_logs WHERE id = $1",
     )
     .bind(id)
@@ -899,6 +915,34 @@ async fn update_credit_rates(
     let val = serde_json::to_value(&body).unwrap();
     sqlx::query(
         "INSERT INTO global_settings (key, value) VALUES ('credit_rates', $1) \
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"
+    )
+    .bind(val)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(body))
+}
+
+/// GET /api/settings/compression
+async fn get_compression(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+) -> Result<Json<crate::compress::CompressionConfig>, (StatusCode, Json<ErrorResponse>)> {
+    let cfg = crate::db::get_compression_config(&state.pool).await;
+    Ok(Json(cfg))
+}
+
+/// PUT /api/settings/compression
+async fn update_compression(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+    Json(body): Json<crate::compress::CompressionConfig>,
+) -> Result<Json<crate::compress::CompressionConfig>, (StatusCode, Json<ErrorResponse>)> {
+    let val = serde_json::to_value(&body).unwrap();
+    sqlx::query(
+        "INSERT INTO global_settings (key, value) VALUES ('compression', $1) \
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"
     )
     .bind(val)
@@ -1043,6 +1087,8 @@ struct StatsOverview {
     total_tokens: i64,
     avg_duration_ms: f64,
     total_credit_cost: f64,
+    compressed_requests: i64,
+    est_tokens_saved: i64,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -1144,7 +1190,9 @@ async fn get_stats(
             COALESCE(SUM(cached_tokens), 0)::BIGINT AS cached_tokens, \
             (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) + COALESCE(SUM(cached_tokens), 0))::BIGINT AS total_tokens, \
             COALESCE(AVG(duration_ms)::FLOAT8, 0) AS avg_duration_ms, \
-            COALESCE(SUM(credit_cost)::FLOAT8, 0) AS total_credit_cost \
+            COALESCE(SUM(credit_cost)::FLOAT8, 0) AS total_credit_cost, \
+            COUNT(*) FILTER (WHERE compressed)::BIGINT AS compressed_requests, \
+            COALESCE(SUM(est_tokens_saved), 0)::BIGINT AS est_tokens_saved \
          FROM request_logs WHERE created_at >= $1 {extra_where}"
     );
     let overview = bind_filters!(sqlx::query_as::<_, StatsOverview>(&overview_sql).bind(since))

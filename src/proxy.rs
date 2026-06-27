@@ -28,6 +28,31 @@ struct LogMeta {
     method: String,
     is_stream: bool,
     request_body: Option<Value>,
+    // 压缩元数据（request_body 始终保留原始内容供审计）
+    compressed: bool,
+    compression_mode: Option<String>,
+    original_prompt_chars: Option<i32>,
+    forwarded_prompt_chars: Option<i32>,
+    est_tokens_saved: Option<i32>,
+}
+
+/// 解析 X-LLMeter-Compress 头：off/0/false → Some(false)，on/1/true → Some(true)，其余 None
+fn parse_compress_header(headers: &http::HeaderMap) -> Option<bool> {
+    let v = headers.get("x-llmeter-compress")?.to_str().ok()?.trim().to_ascii_lowercase();
+    match v.as_str() {
+        "off" | "0" | "false" | "no" => Some(false),
+        "on" | "1" | "true" | "yes" => Some(true),
+        _ => None,
+    }
+}
+
+/// 压缩启用优先级：请求头 off > 每模型 false > 请求头 on > 每模型 true > 全局
+fn compression_enabled_for(header: Option<bool>, per_model: Option<bool>, global_enabled: bool) -> bool {
+    if header == Some(false) { return false; }
+    if per_model == Some(false) { return false; }
+    if header == Some(true) { return true; }
+    if per_model == Some(true) { return true; }
+    global_enabled
 }
 
 /// 从请求头中提取 API Key（支持 Bearer、x-api-key、x-goog-api-key）
@@ -157,6 +182,51 @@ pub async fn proxy_handler(
         }
     };
 
+    // 5.5 提示词压缩：在转发上游前压缩请求体中的自然语言文本（仅非透传请求）
+    //     request_body 仍记录原始内容；只有转发给上游的副本被压缩。
+    let header_pref = parse_compress_header(&parts.headers);
+    let mut comp_mode_str: Option<String> = None;
+    let mut comp_header_val: Option<String> = None;
+    let mut forward_json: Option<Value> = body_json.clone();
+    let mut forward_bytes: Bytes = body_bytes.clone();
+    let mut comp_orig_chars: Option<i32> = None;
+    let mut comp_fwd_chars: Option<i32> = None;
+    let mut comp_saved: Option<i32> = None;
+
+    if !is_passthrough && header_pref != Some(false) {
+        let cfg = crate::db::get_compression_config(&state.pool).await;
+        let per_model = model_configs.first().and_then(|c| c.compression_enabled);
+        let enabled = compression_enabled_for(header_pref, per_model, cfg.enabled);
+        if enabled
+            && cfg.mode == crate::compress::CompressionMode::Prose
+            && body_bytes.len() <= cfg.max_body_bytes
+        {
+            if let Some(jb) = body_json.clone() {
+                let (compressed_json, stats) =
+                    crate::compress::compress_request(detected_protocol, jb, &cfg);
+                if stats.did_compress() {
+                    if let Ok(vec) = serde_json::to_vec(&compressed_json) {
+                        forward_bytes = Bytes::from(vec);
+                        forward_json = Some(compressed_json);
+                        comp_mode_str = Some("prose".to_string());
+                        comp_orig_chars = Some(stats.chars_before as i32);
+                        comp_fwd_chars = Some(stats.chars_after as i32);
+                        comp_saved = Some(stats.est_tokens_saved as i32);
+                        if cfg.emit_response_header {
+                            comp_header_val = Some(stats.header_value(cfg.mode));
+                        }
+                        tracing::info!(
+                            "Compression: {} fields, ~{} tokens saved ({}B -> {}B)",
+                            stats.fields_compressed, stats.est_tokens_saved,
+                            stats.chars_before, stats.chars_after
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let did_compress = comp_mode_str.is_some();
+
     // 6. 按优先级依次尝试每个配置，失败后降级到下一个
     let mut last_error: Option<(StatusCode, String)> = None;
 
@@ -171,18 +241,18 @@ pub async fn proxy_handler(
         // 为 OpenAI Chat Completions 流式请求自动注入 stream_options 以获取 usage 数据
         // Responses API (/v1/responses) 无需注入，其 response.completed 事件默认包含 usage
         let forwarded_body = if is_stream && actual_protocol == Protocol::OpenAI && !path.starts_with("/v1/responses") {
-            if let Some(mut json) = body_json.clone() {
+            if let Some(mut json) = forward_json.clone() {
                 if let Some(obj) = json.as_object_mut() {
                     obj.entry("stream_options").or_insert_with(|| {
                         serde_json::json!({"include_usage": true})
                     });
                 }
-                Bytes::from(serde_json::to_vec(&json).unwrap_or_else(|_| body_bytes.to_vec()))
+                Bytes::from(serde_json::to_vec(&json).unwrap_or_else(|_| forward_bytes.to_vec()))
             } else {
-                body_bytes.clone()
+                forward_bytes.clone()
             }
         } else {
-            body_bytes.clone()
+            forward_bytes.clone()
         };
 
         let forwarded_headers =
@@ -275,12 +345,17 @@ pub async fn proxy_handler(
             method: method.to_string(),
             is_stream,
             request_body: body_json.clone(),
+            compressed: did_compress,
+            compression_mode: comp_mode_str.clone(),
+            original_prompt_chars: comp_orig_chars,
+            forwarded_prompt_chars: comp_fwd_chars,
+            est_tokens_saved: comp_saved,
         };
 
         if is_stream {
-            return handle_streaming_response(state.pool.clone(), log_meta, actual_protocol, upstream_resp, resp_status, start, is_passthrough).await;
+            return handle_streaming_response(state.pool.clone(), log_meta, actual_protocol, upstream_resp, resp_status, start, is_passthrough, comp_header_val.clone()).await;
         } else {
-            return handle_normal_response(state.pool.clone(), log_meta, actual_protocol, upstream_resp, resp_status, start, is_passthrough).await;
+            return handle_normal_response(state.pool.clone(), log_meta, actual_protocol, upstream_resp, resp_status, start, is_passthrough, comp_header_val.clone()).await;
         }
     }
 
@@ -318,6 +393,7 @@ async fn handle_normal_response(
     status: reqwest::StatusCode,
     start: Instant,
     is_passthrough: bool,
+    comp_header: Option<String>,
 ) -> Result<Response, (StatusCode, String)> {
     let resp_headers = upstream_resp.headers().clone();
     let resp_bytes = upstream_resp.bytes().await.map_err(|e| {
@@ -359,8 +435,9 @@ async fn handle_normal_response(
         let insert_res = sqlx::query(
             "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, \
              request_body, response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
-             total_tokens, duration_ms, error_message, response_body, updated_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now())"
+             total_tokens, duration_ms, error_message, response_body, \
+             compressed, compression_mode, original_prompt_chars, forwarded_prompt_chars, est_tokens_saved, updated_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23, now())"
         )
         .bind(log_id).bind(meta.org_id).bind(meta.api_key_id)
         .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
@@ -369,6 +446,8 @@ async fn handle_normal_response(
         .bind(usage.prompt_tokens).bind(usage.completion_tokens)
         .bind(usage.cached_tokens).bind(usage.total_tokens)
         .bind(duration_ms).bind(error_msg.clone()).bind(resp_json.clone())
+        .bind(meta.compressed).bind(meta.compression_mode.as_deref())
+        .bind(meta.original_prompt_chars).bind(meta.forwarded_prompt_chars).bind(meta.est_tokens_saved)
         .execute(&pool)
         .await;
 
@@ -442,6 +521,11 @@ async fn handle_normal_response(
         }
         builder = builder.header(name.as_str(), value);
     }
+    if let Some(hv) = &comp_header {
+        if let Ok(v) = http::HeaderValue::from_str(hv) {
+            builder = builder.header("x-llmeter-compression", v);
+        }
+    }
     builder
         .body(Body::from(resp_bytes))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to build response: {e}")))
@@ -456,6 +540,7 @@ async fn handle_streaming_response(
     status: reqwest::StatusCode,
     start: Instant,
     is_passthrough: bool,
+    comp_header: Option<String>,
 ) -> Result<Response, (StatusCode, String)> {
     let resp_headers = upstream_resp.headers().clone();
     let byte_stream = upstream_resp.bytes_stream();
@@ -547,8 +632,9 @@ async fn handle_streaming_response(
         let insert_res = sqlx::query(
             "INSERT INTO request_logs (id, org_id, api_key_id, provider, model, path, method, is_stream, \
              request_body, response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
-             total_tokens, duration_ms, error_message, response_body, updated_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now())"
+             total_tokens, duration_ms, error_message, response_body, \
+             compressed, compression_mode, original_prompt_chars, forwarded_prompt_chars, est_tokens_saved, updated_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23, now())"
         )
         .bind(log_id).bind(meta.org_id).bind(meta.api_key_id)
         .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
@@ -557,6 +643,8 @@ async fn handle_streaming_response(
         .bind(usage.prompt_tokens).bind(usage.completion_tokens)
         .bind(usage.cached_tokens).bind(usage.total_tokens)
         .bind(duration_ms).bind(error_msg).bind(resp_json.clone())
+        .bind(meta.compressed).bind(meta.compression_mode.as_deref())
+        .bind(meta.original_prompt_chars).bind(meta.forwarded_prompt_chars).bind(meta.est_tokens_saved)
         .execute(&pool_clone)
         .await;
 
@@ -629,6 +717,11 @@ async fn handle_streaming_response(
             continue;
         }
         builder = builder.header(name.as_str(), value);
+    }
+    if let Some(hv) = &comp_header {
+        if let Ok(v) = http::HeaderValue::from_str(hv) {
+            builder = builder.header("x-llmeter-compression", v);
+        }
     }
     builder
         .body(Body::from_stream(body_stream))

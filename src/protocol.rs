@@ -102,7 +102,7 @@ pub fn transform_headers(
         // 移除认证头（后续统一重设）和 content-length（body 可能被修改）
         if matches!(
             name_lower.as_str(),
-            "authorization" | "x-api-key" | "x-goog-api-key" | "content-length"
+            "authorization" | "x-api-key" | "x-goog-api-key" | "content-length" | "x-llmeter-compress"
         ) {
             continue;
         }

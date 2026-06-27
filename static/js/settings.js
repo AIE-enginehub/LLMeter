@@ -4,6 +4,7 @@
 function settingsTab() {
   return {
     rates: { input_rate: 1221, output_rate: 203.5, cached_rate: 12210, long_context_threshold: null, long_context_input_rate: null, long_context_output_rate: null, long_context_cached_rate: null },
+    compression: { enabled: false, mode: 'prose', scope: { system: true, user: true, assistant: false }, min_field_chars: 80, min_savings_pct: 5, max_body_bytes: 8388608, emit_response_header: true },
     pwdForm: { old_password: '', new_password: '', confirm_password: '' },
     showOldPwd: false,
     showNewPwd: false,
@@ -12,6 +13,16 @@ function settingsTab() {
     async load() {
       try {
         this.rates = await api('/api/settings/credit_rates');
+      } catch (e) { window.showToast(e.message, 'error'); }
+      try {
+        this.compression = await api('/api/settings/compression');
+      } catch (e) { window.showToast(e.message, 'error'); }
+    },
+
+    async saveCompression() {
+      try {
+        await api('/api/settings/compression', { method: 'PUT', body: JSON.stringify(this.compression) });
+        window.showToast(t('save_success'));
       } catch (e) { window.showToast(e.message, 'error'); }
     },
 
