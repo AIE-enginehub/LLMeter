@@ -98,6 +98,10 @@ window.i18nDict = {
     "est_tokens_saved": "估算节省 Token",
     "compressed_requests": "已压缩请求",
     "compressed_tag": "已压缩",
+    "compression_override": "提示词压缩（覆盖全局）",
+    "compression_inherit": "继承全局设置",
+    "compression_force_on": "强制开启",
+    "compression_force_off": "强制关闭",
     "lang": "English"
   },
   "en": {
@@ -196,6 +200,10 @@ window.i18nDict = {
     "est_tokens_saved": "Est. Tokens Saved",
     "compressed_requests": "Compressed Requests",
     "compressed_tag": "Compressed",
+    "compression_override": "Prompt Compression (override global)",
+    "compression_inherit": "Inherit global setting",
+    "compression_force_on": "Force on",
+    "compression_force_off": "Force off",
     "lang": "中文"
   }
 };

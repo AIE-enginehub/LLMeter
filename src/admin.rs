@@ -14,6 +14,16 @@ use uuid::Uuid;
 use crate::auth::{self, AuthAdmin};
 use crate::state::AppState;
 
+/// 双层 Option 反序列化：区分「字段缺省」(None) 与「显式 null」(Some(None))。
+/// 用于 PUT 更新可空列时，让显式 null 能把列重置为 NULL，而非被 COALESCE 保留。
+fn double_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Ok(Some(Option::deserialize(de)?))
+}
+
 // ============================================================
 // 公共类型
 // ============================================================
@@ -595,7 +605,9 @@ struct UpdateModelRequest {
     real_api_key: Option<String>,
     priority: Option<i32>,
     is_active: Option<bool>,
-    compression_enabled: Option<bool>,
+    /// 双层 Option：缺省=不变，显式 null=重置为继承全局，true/false=覆盖
+    #[serde(default, deserialize_with = "double_option")]
+    compression_enabled: Option<Option<bool>>,
 }
 
 /// GET /api/orgs/:org_id/models — 列出组织的模型配置
@@ -661,7 +673,7 @@ async fn update_model(
             real_api_key = COALESCE($6, real_api_key), \
             priority = COALESCE($7, priority), \
             is_active = COALESCE($8, is_active), \
-            compression_enabled = COALESCE($9, compression_enabled), \
+            compression_enabled = CASE WHEN $10 THEN $9 ELSE compression_enabled END, \
             updated_at = now() \
          WHERE id = $1 \
          RETURNING id, org_id, name, protocol, model_patterns, base_url, real_api_key, \
@@ -675,7 +687,8 @@ async fn update_model(
     .bind(&body.real_api_key)
     .bind(body.priority)
     .bind(body.is_active)
-    .bind(body.compression_enabled)
+    .bind(body.compression_enabled.flatten()) // $9: 内层值（Some(None)→NULL）
+    .bind(body.compression_enabled.is_some()) // $10: 是否要写入该列
     .fetch_optional(&state.pool)
     .await
     .map_err(friendly_db_err)?

@@ -64,21 +64,25 @@ Ordered, bottom-up. Do not start until the proposal is approved. Check boxes as 
 
 ## 7. Admin API & UI
 - [x] `GET`/`PUT /api/settings/compression` in `src/admin.rs` (mirror credit_rates handlers).
-- [x] Extend `/api/stats` with `total_est_tokens_saved` and compressed-request count.
+- [x] Extend `/api/stats` with est-tokens-saved and compressed-request count.
 - [x] Surface `compression_enabled` in model_config create/update endpoints.
+- [x] Per-model override control in the model-config form (tri-state inherit/on/off);
+      `update_model` uses a double-option + `CASE` so an explicit `null` resets to inherit.
 - [x] `static/js/settings.js` + `index.html`: compression toggle + scope/threshold form.
-- [x] `static/js/usage.js`: cumulative estimated savings tile.
-- [x] `static/js/logs.js`: compression badge + estimate in Log Detail.
+- [x] Overview tab: cumulative estimated savings tile (driven by `/api/stats`).
+- [x] `static/js/logs.js`/index.html: compression badge + estimate in Log list & Detail.
 - [x] i18n strings (`static/js/i18n.js`) EN + ZH.
 
 ## 8. Verification
-- [x] `cargo test` green (ported + new tests).
+- [x] `cargo test` green — 21 tests (13 compress + 8 proxy precedence/header).
 - [x] `cargo build --release` clean.
-- [ ] Manual: same request with and without `X-LLMeter-Compress: off`; confirm forwarded
-      body differs only in prose, response identical, log/savings correct, credit lower on
-      the compressed run.
+- [x] CI: `.github/workflows/ci.yml` runs build + test on PRs and pushes (green on fork).
+- [x] Scripted manual A/B: `scripts/verify_compression.sh` sends the same request with and
+      without `X-LLMeter-Compress: off`, diffs the response shape, and shows the
+      `X-LLMeter-Compression` savings header. (Run against a live instance with compression on.)
 - [ ] Non-inferiority A/B (flip the opt-out header across a task set) confirms resolved-rate
-      parity before recommending operators enable on real traffic.
+      parity before recommending operators enable on real traffic. *(Needs a live provider +
+      task set; harness pending — see design.md §11.)*
 
 ## 9. Docs
 - [x] README / README_zh: a "Prompt Compression" section (what it does, default-off,

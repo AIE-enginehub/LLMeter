@@ -727,3 +727,69 @@ async fn handle_streaming_response(
         .body(Body::from_stream(body_stream))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to build streaming response: {e}")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers_with(name: &str, val: &str) -> http::HeaderMap {
+        let mut h = http::HeaderMap::new();
+        h.insert(
+            http::header::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            http::HeaderValue::from_str(val).unwrap(),
+        );
+        h
+    }
+
+    // ── parse_compress_header ────────────────────────────────────
+    #[test]
+    fn header_off_variants() {
+        for v in ["off", "0", "false", "no", "OFF", "False"] {
+            assert_eq!(parse_compress_header(&headers_with("x-llmeter-compress", v)), Some(false), "value {v}");
+        }
+    }
+
+    #[test]
+    fn header_on_variants() {
+        for v in ["on", "1", "true", "yes", "ON", "True"] {
+            assert_eq!(parse_compress_header(&headers_with("x-llmeter-compress", v)), Some(true), "value {v}");
+        }
+    }
+
+    #[test]
+    fn header_absent_or_unknown_is_none() {
+        assert_eq!(parse_compress_header(&http::HeaderMap::new()), None);
+        assert_eq!(parse_compress_header(&headers_with("x-llmeter-compress", "maybe")), None);
+    }
+
+    // ── compression_enabled_for precedence ───────────────────────
+    // 优先级：请求头 off > 每模型 false > 请求头 on > 每模型 true > 全局
+    #[test]
+    fn precedence_request_off_wins_over_everything() {
+        assert!(!compression_enabled_for(Some(false), Some(true), true));
+        assert!(!compression_enabled_for(Some(false), None, true));
+    }
+
+    #[test]
+    fn precedence_per_model_false_beats_request_on() {
+        assert!(!compression_enabled_for(Some(true), Some(false), true));
+        assert!(!compression_enabled_for(None, Some(false), true));
+    }
+
+    #[test]
+    fn precedence_request_on_beats_per_model_true_and_global() {
+        assert!(compression_enabled_for(Some(true), None, false));
+        assert!(compression_enabled_for(Some(true), Some(true), false));
+    }
+
+    #[test]
+    fn precedence_per_model_true_beats_global_off() {
+        assert!(compression_enabled_for(None, Some(true), false));
+    }
+
+    #[test]
+    fn precedence_falls_back_to_global() {
+        assert!(compression_enabled_for(None, None, true));
+        assert!(!compression_enabled_for(None, None, false));
+    }
+}

@@ -538,6 +538,14 @@
                     <input x-model.number="modelForm.priority" type="number" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="0">
                   </div>
                 </div>
+                <div class="mt-4">
+                  <label class="block text-xs text-slate-500 mb-1" x-text="t('compression_override')"></label>
+                  <select x-model="modelForm.compression_enabled" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                    <option value="" x-text="t('compression_inherit')"></option>
+                    <option value="true" x-text="t('compression_force_on')"></option>
+                    <option value="false" x-text="t('compression_force_off')"></option>
+                  </select>
+                </div>
                 <div class="flex justify-end gap-2 mt-5">
                   <button @click="showModelForm = false" class="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 transition" x-text="t('cancel')"></button>
                   <button @click="saveModel()" class="px-4 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition" x-text="modelForm.id ? t('save') : t('confirm_create')"></button>
