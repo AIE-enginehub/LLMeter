@@ -24,7 +24,7 @@ function orgsTab() {
     creditLogPageSize: 15,
     creditLogTotal: 0,
     creditLogType: '',
-    modelForm: { id: null, name: '', protocol: 'openai', model_patterns: '', base_url: '', real_api_key: '', priority: 0 },
+    modelForm: { id: null, name: '', protocol: 'openai', model_patterns: '', base_url: '', real_api_key: '', priority: 0, compression_enabled: '' },
 
     async load() {
       this.loading = true;
@@ -162,20 +162,24 @@ function orgsTab() {
 
     openModelForm(model = null) {
       if (model) {
-        this.modelForm = { id: model.id, name: model.name, protocol: model.protocol, model_patterns: model.model_patterns, base_url: model.base_url, real_api_key: model.real_api_key, priority: model.priority };
+        const ce = model.compression_enabled === true ? 'true' : model.compression_enabled === false ? 'false' : '';
+        this.modelForm = { id: model.id, name: model.name, protocol: model.protocol, model_patterns: model.model_patterns, base_url: model.base_url, real_api_key: model.real_api_key, priority: model.priority, compression_enabled: ce };
       } else {
-        this.modelForm = { id: null, name: '', protocol: 'openai', model_patterns: '', base_url: '', real_api_key: '', priority: 0 };
+        this.modelForm = { id: null, name: '', protocol: 'openai', model_patterns: '', base_url: '', real_api_key: '', priority: 0, compression_enabled: '' };
       }
       this.showModelForm = true;
     },
 
     async saveModel() {
       try {
+        // 三态转换：'' → null (继承全局)，'true'/'false' → 布尔
+        const ce = this.modelForm.compression_enabled;
+        const payload = { ...this.modelForm, compression_enabled: ce === 'true' ? true : ce === 'false' ? false : null };
         if (this.modelForm.id) {
-          await api(`/api/models/${this.modelForm.id}`, { method: 'PUT', body: JSON.stringify(this.modelForm) });
+          await api(`/api/models/${this.modelForm.id}`, { method: 'PUT', body: JSON.stringify(payload) });
           window.showToast(t('model_updated'));
         } else {
-          await api(`/api/orgs/${this.selectedOrg.id}/models`, { method: 'POST', body: JSON.stringify(this.modelForm) });
+          await api(`/api/orgs/${this.selectedOrg.id}/models`, { method: 'POST', body: JSON.stringify(payload) });
           window.showToast(t('model_added'));
         }
         this.showModelForm = false;

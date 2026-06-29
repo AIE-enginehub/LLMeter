@@ -204,7 +204,7 @@
           <template x-if="!loading && stats">
             <div>
               <!-- 统计卡片 -->
-              <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+              <div class="grid grid-cols-2 lg:grid-cols-6 gap-4 mb-8">
                 <div class="bg-gradient-to-br from-blue-50 to-white border border-blue-100/60 rounded-xl p-4 anim-fade-in-up">
                   <p class="text-xs text-blue-500/80 font-medium" x-text="t('total_req')"></p>
                   <p class="text-2xl font-bold text-slate-800 mt-1" x-text="formatNum(stats.overview.total_requests)"></p>
@@ -229,6 +229,11 @@
                 <div class="bg-gradient-to-br from-amber-50 to-white border border-amber-100/60 rounded-xl p-4 anim-fade-in-up anim-delay-4">
                   <p class="text-xs text-amber-500/80 font-medium" x-text="t('avg_time')"></p>
                   <p class="text-2xl font-bold text-slate-800 mt-1"><span x-text="Math.round(stats.overview.avg_duration_ms)"></span><span class="text-sm font-normal text-slate-400">ms</span></p>
+                </div>
+                <div class="bg-gradient-to-br from-teal-50 to-white border border-teal-100/60 rounded-xl p-4 anim-fade-in-up anim-delay-4">
+                  <p class="text-xs text-teal-500/80 font-medium" x-text="t('est_tokens_saved')"></p>
+                  <p class="text-2xl font-bold text-slate-800 mt-1" x-text="fmtToken(stats.overview.est_tokens_saved || 0)"></p>
+                  <p class="text-[10px] text-slate-500 mt-1"><span x-text="formatNum(stats.overview.compressed_requests || 0)"></span> <span x-text="t('compressed_requests')"></span></p>
                 </div>
               </div>
 
@@ -533,6 +538,14 @@
                     <input x-model.number="modelForm.priority" type="number" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="0">
                   </div>
                 </div>
+                <div class="mt-4">
+                  <label class="block text-xs text-slate-500 mb-1" x-text="t('compression_override')"></label>
+                  <select x-model="modelForm.compression_enabled" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                    <option value="" x-text="t('compression_inherit')"></option>
+                    <option value="true" x-text="t('compression_force_on')"></option>
+                    <option value="false" x-text="t('compression_force_off')"></option>
+                  </select>
+                </div>
                 <div class="flex justify-end gap-2 mt-5">
                   <button @click="showModelForm = false" class="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 transition" x-text="t('cancel')"></button>
                   <button @click="saveModel()" class="px-4 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition" x-text="modelForm.id ? t('save') : t('confirm_create')"></button>
@@ -722,6 +735,7 @@
                         <td class="px-4 py-2.5 text-right text-xs font-medium">
                           <span class="text-indigo-600" x-text="log.credit_cost ? Number(log.credit_cost).toFixed(4) : '-'"></span>
                           <span x-show="log.is_long_context" class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-100 text-orange-700" x-text="t('long_ctx_tag')"></span>
+                          <span x-show="log.compressed" :title="'~' + (log.est_tokens_saved||0) + ' tokens'" class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-100 text-teal-700" x-text="t('compressed_tag')"></span>
                         </td>
                           <td class="px-4 py-2.5 text-right text-xs text-slate-500" x-text="log.duration_ms != null ? log.duration_ms + 'ms' : '-'"></td>
                         </tr>
@@ -766,6 +780,13 @@
                       <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('completion_token')"></p><p class="text-sm text-emerald-600 font-medium" x-text="logDetail.completion_tokens ?? '-'"></p></div>
                       <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('cached_token')"></p><p class="text-sm text-amber-600 font-medium" x-text="logDetail.cached_tokens ?? '-'"></p></div>
                       <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('total_token')"></p><p class="text-sm text-slate-700 font-medium" x-text="logDetail.total_tokens ?? '-'"></p></div>
+                      <div class="bg-slate-50 rounded-lg px-3 py-2">
+                        <p class="text-xs text-slate-400" x-text="t('est_tokens_saved')"></p>
+                        <div class="flex items-center gap-1.5 mt-0.5">
+                          <p class="text-sm text-teal-600 font-medium" x-text="logDetail.est_tokens_saved ?? '-'"></p>
+                          <span x-show="logDetail.compressed" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-100 text-teal-700" x-text="t('compressed_tag')"></span>
+                        </div>
+                      </div>
                       <div class="bg-slate-50 rounded-lg px-3 py-2">
                         <p class="text-xs text-slate-400" x-text="t('consume_credit')"></p>
                         <div class="flex items-center gap-1.5 mt-0.5">
@@ -1097,6 +1118,43 @@
 
               <div class="pt-4 border-t border-slate-100 flex justify-end">
                 <button @click="save()" class="px-5 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition shadow-sm" x-text="t('save_settings')"></button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 提示词压缩 / Prompt compression -->
+          <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-6 max-w-2xl mt-6">
+            <h3 class="text-base font-semibold text-slate-800 mb-1" x-text="t('compression_title')"></h3>
+            <p class="text-xs text-slate-500 mb-6" x-text="t('compression_desc')"></p>
+            <div class="space-y-4">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" x-model="compression.enabled" class="rounded border-slate-300">
+                <span class="text-sm text-slate-700" x-text="t('compression_enabled')"></span>
+              </label>
+              <div>
+                <label class="block text-sm text-slate-600 mb-1.5" x-text="t('compression_scope')"></label>
+                <div class="flex items-center gap-5">
+                  <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" x-model="compression.scope.system" class="rounded border-slate-300"><span class="text-sm text-slate-600">system</span></label>
+                  <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" x-model="compression.scope.user" class="rounded border-slate-300"><span class="text-sm text-slate-600">user</span></label>
+                  <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" x-model="compression.scope.assistant" class="rounded border-slate-300"><span class="text-sm text-slate-600">assistant</span></label>
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-sm text-slate-600 mb-1.5" x-text="t('compression_min_field_chars')"></label>
+                  <input x-model.number="compression.min_field_chars" type="number" step="1" min="0" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                </div>
+                <div>
+                  <label class="block text-sm text-slate-600 mb-1.5" x-text="t('compression_min_savings_pct')"></label>
+                  <input x-model.number="compression.min_savings_pct" type="number" step="1" min="0" max="100" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                </div>
+              </div>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" x-model="compression.emit_response_header" class="rounded border-slate-300">
+                <span class="text-sm text-slate-700" x-text="t('compression_emit_header')"></span>
+              </label>
+              <div class="pt-4 border-t border-slate-100 flex justify-end">
+                <button @click="saveCompression()" class="px-5 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition shadow-sm" x-text="t('save_settings')"></button>
               </div>
             </div>
           </div>

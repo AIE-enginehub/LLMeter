@@ -15,6 +15,7 @@ An AI API Proxy Gateway — Unify, proxy, and forward APIs from various AI provi
 - **Request Logs**: Fully records request and response payloads. Supports pagination and multi-condition filtering.
 - **Admin Dashboard**: Modern built-in Web UI (supports English and Chinese) for managing organizations, keys, models, logs, and system settings.
 - **Streaming Support**: Fully supports SSE (Server-Sent Events) streaming responses, forwarding chunks in real-time.
+- **Prompt Compression** (opt-in): Strips filler words and verbose phrasing from request prose before forwarding upstream, cutting input tokens sent to the external LLM while preserving the API contract. Code, JSON, and tool schemas are never touched. See [Prompt Compression](#-prompt-compression).
 - **High Performance**: Built with Rust (Axum + Tokio) for extremely low memory footprint and high concurrency.
 
 ## 📸 Screenshots
@@ -135,6 +136,50 @@ const response = await client.chat.completions.create({
 ```
 
 The same applies to Gemini and other providers. The system automatically matches routing rules based on the requested model name and forwards it to the correct provider.
+
+## 🗜️ Prompt Compression
+
+LLMeter can compress the natural-language prose in a request body **before** forwarding it
+to the upstream provider, reducing the input tokens you pay for. Because credit is deducted
+from the provider's reported usage, a smaller prompt means the operator pays less upstream
+**and** the organization's credit consumption drops — with no change to billing logic.
+
+The compressor is a deterministic, structure-preserving prose filter (ported from
+[PRECC](https://github.com/peri-a-i/precc-cc)): it removes filler words (`please`, `just`,
+`basically`, …) and rewrites verbose phrases (`in order to` → `to`). It is **code-safe** —
+fenced code blocks, indented code, inline backtick spans, JSON structure, tool/function
+schemas, images, and `tool`/`assistant` turns are never modified. Only `system` and `user`
+prose is touched (configurable).
+
+**Disabled by default.** Enable and tune it under **Settings → Prompt Compression** in the
+admin dashboard, which persists to the global `compression` setting:
+
+| Field | Meaning | Default |
+|---|---|---|
+| `enabled` | Master switch | `false` |
+| `scope` | Which roles to compress (`system`, `user`, `assistant`) | system+user |
+| `min_field_chars` | Skip fields shorter than this | `80` |
+| `min_savings_pct` | Keep original if savings below this % | `5` |
+| `max_body_bytes` | Skip compression above this body size | `8 MiB` |
+| `emit_response_header` | Add an `X-LLMeter-Compression` info header | `true` |
+
+**Controls & precedence** (highest first):
+1. Per-request header `X-LLMeter-Compress: off` (or `0`/`false`) — forces passthrough for
+   that request. `on` forces it on. The header is stripped before forwarding upstream.
+2. Per-model override — set `compression_enabled` on a model config (`true`/`false`) to
+   override the global switch for that route.
+3. Global `enabled`.
+
+**Transparency / verify it yourself.** The original (uncompressed) request body is always
+what gets logged for audit. Each request records whether it was compressed and the estimated
+tokens saved (visible on the Overview tile, the Usage stats, and the Log Detail view). To
+confirm behavior is otherwise identical, send the same request twice — once with
+`X-LLMeter-Compress: off` — and compare the responses:
+
+```bash
+curl $BASE/v1/chat/completions -H "Authorization: Bearer gc-xxx" -H 'X-LLMeter-Compress: off' -d @req.json
+curl $BASE/v1/chat/completions -H "Authorization: Bearer gc-xxx"                                -d @req.json
+```
 
 ## 📄 License
 
