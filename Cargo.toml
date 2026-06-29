@@ -34,6 +34,7 @@ hex = "0.4"
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls", "hostname", "pool"] }
 printpdf = "0.7"
 font-subset = "0.1"
+regex = "1"
 
 [profile.dev]
 opt-level = 0

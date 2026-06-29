@@ -46,6 +46,8 @@ pub struct ModelConfig {
     pub real_api_key: String,
     pub priority: i32,
     pub is_active: bool,
+    /// 压缩开关覆盖：None 继承全局，Some(true/false) 覆盖
+    pub compression_enabled: Option<bool>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -85,6 +87,7 @@ pub async fn run_migrations(pool: &PgPool) {
         ("006_projects",            include_str!("../migrations/006_projects.sql")),
         ("007_project_data_migration", include_str!("../migrations/007_project_data_migration.sql")),
         ("008_credit_price",        include_str!("../migrations/008_credit_price.sql")),
+        ("009_prompt_compression",  include_str!("../migrations/009_prompt_compression.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -296,6 +299,24 @@ pub async fn get_mail_settings(pool: &PgPool) -> MailSettings {
     MailSettings::default()
 }
 
+/// 获取全局提示词压缩配置（global_settings key = 'compression'），缺失时返回禁用的默认值
+pub async fn get_compression_config(pool: &PgPool) -> crate::compress::CompressionConfig {
+    let row = sqlx::query("SELECT value FROM global_settings WHERE key = 'compression'")
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+
+    if let Some(r) = row {
+        if let Ok(val) = r.try_get::<serde_json::Value, _>("value") {
+            if let Ok(cfg) = serde_json::from_value(val) {
+                return cfg;
+            }
+        }
+    }
+    crate::compress::CompressionConfig::default()
+}
+
 /// 扣除组织积分并记录流水
 pub async fn deduct_credit(
     pool: &PgPool,
@@ -337,7 +358,7 @@ pub async fn deduct_credit(
 pub async fn find_first_model_config(pool: &PgPool, org_id: Uuid, protocol: &str) -> Option<ModelConfig> {
     sqlx::query_as::<_, ModelConfig>(
         "SELECT id, org_id, name, protocol, model_patterns, base_url, \
-                real_api_key, priority, is_active, created_at, updated_at \
+                real_api_key, priority, is_active, compression_enabled, created_at, updated_at \
          FROM model_configs WHERE org_id = $1 AND is_active = true AND protocol = $2 \
          ORDER BY priority ASC LIMIT 1"
     )
@@ -357,7 +378,7 @@ pub async fn find_all_model_configs(
     let configs = sqlx::query_as::<_, ModelConfig>(
         r#"
         SELECT id, org_id, name, protocol, model_patterns, base_url,
-               real_api_key, priority, is_active, created_at, updated_at
+               real_api_key, priority, is_active, compression_enabled, created_at, updated_at
         FROM model_configs
         WHERE org_id = $1 AND is_active = true
         ORDER BY priority ASC
