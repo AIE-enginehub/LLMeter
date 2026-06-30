@@ -367,6 +367,81 @@ pub async fn proxy_handler(
     Err(last_error.unwrap_or((StatusCode::BAD_GATEWAY, "All upstream configs failed".to_string())))
 }
 
+/// 根据模型名称匹配积分扣除比例并执行扣费
+/// 优先精确匹配 model_credit_rates 表，无匹配时回退到全局 credit_rates
+async fn deduct_credits(
+    pool: &sqlx::PgPool,
+    org_id: Uuid,
+    log_id: Uuid,
+    model_name: Option<&str>,
+    credit_price: rust_decimal::Decimal,
+    usage: &TokenUsage,
+) {
+    // 按模型名称精确匹配，未匹配时自动回退到 default 行
+    let rate = crate::db::find_model_credit_rate(pool, model_name.unwrap_or("default")).await;
+
+    let (base_ir, base_or, base_cr, lc_threshold, lc_input, lc_output, lc_cached) =
+        if let Some(ref mr) = rate {
+            (
+                mr.input_rate, mr.output_rate, mr.cached_rate,
+                mr.long_context_threshold.map(|v| v as u64),
+                mr.long_context_input_rate,
+                mr.long_context_output_rate,
+                mr.long_context_cached_rate,
+            )
+        } else {
+            // model_credit_rates 表为空时的硬编码兜底
+            (1221.0, 203.5, 12210.0, None, None, None, None)
+        };
+
+    let is_long_context = lc_threshold
+        .filter(|&t| t > 0)
+        .and_then(|threshold| usage.prompt_tokens.map(|p| (p as u64) >= threshold))
+        .unwrap_or(false)
+        && lc_input.is_some();
+
+    let (ir, or, cr) = if is_long_context {
+        (
+            lc_input.unwrap_or(base_ir),
+            lc_output.unwrap_or(base_or),
+            lc_cached.unwrap_or(base_cr),
+        )
+    } else {
+        (base_ir, base_or, base_cr)
+    };
+
+    let mut cost = 0.0;
+    if let Some(p) = usage.prompt_tokens {
+        if ir > 0.0 { cost += (p as f64) / ir; }
+    }
+    if let Some(c) = usage.completion_tokens {
+        if or > 0.0 { cost += (c as f64) / or; }
+    }
+    if let Some(ca) = usage.cached_tokens {
+        if cr > 0.0 { cost += (ca as f64) / cr; }
+    }
+
+    if cost > 0.0 {
+        if let Some(decimal_cost) = rust_decimal::Decimal::from_f64(cost) {
+            let _ = crate::db::deduct_credit(pool, org_id, decimal_cost, &log_id.to_string()).await;
+            let money = decimal_cost * credit_price;
+            let _ = sqlx::query("UPDATE request_logs SET credit_cost = $1, money_cost = $3, is_long_context = $4 WHERE id = $2")
+                .bind(decimal_cost)
+                .bind(log_id)
+                .bind(money)
+                .bind(is_long_context)
+                .execute(pool)
+                .await;
+        }
+    } else if is_long_context {
+        let _ = sqlx::query("UPDATE request_logs SET is_long_context = $2 WHERE id = $1")
+            .bind(log_id)
+            .bind(true)
+            .execute(pool)
+            .await;
+    }
+}
+
 /// 去掉请求路径中的协议前缀，避免与 base_url 中的路径重复
 /// 例：path="/v1/chat/completions" + OpenAI → "/chat/completions"
 ///     path="/v1beta/models/gemini:gen" + Gemini → "/models/gemini:gen"
@@ -461,60 +536,8 @@ async fn handle_normal_response(
 
         if is_passthrough { return; }
 
-        // 扣除积分
         if status_str == "success" {
-            let rates = crate::db::get_credit_rates(&pool).await;
-
-            // 判断是否触发长上下文：输入 Token >= 阈值且长上下文比例已配置
-            let is_long_context = rates.long_context_threshold
-                .filter(|&t| t > 0)
-                .and_then(|threshold| {
-                    usage.prompt_tokens.map(|p| (p as u64) >= threshold)
-                })
-                .unwrap_or(false)
-                && rates.long_context_input_rate.is_some();
-
-            // 根据是否长上下文选择对应的比例
-            let (ir, or, cr) = if is_long_context {
-                (
-                    rates.long_context_input_rate.unwrap_or(rates.input_rate),
-                    rates.long_context_output_rate.unwrap_or(rates.output_rate),
-                    rates.long_context_cached_rate.unwrap_or(rates.cached_rate),
-                )
-            } else {
-                (rates.input_rate, rates.output_rate, rates.cached_rate)
-            };
-
-            let mut cost = 0.0;
-            if let Some(p) = usage.prompt_tokens {
-                if ir > 0.0 { cost += (p as f64) / ir; }
-            }
-            if let Some(c) = usage.completion_tokens {
-                if or > 0.0 { cost += (c as f64) / or; }
-            }
-            if let Some(ca) = usage.cached_tokens {
-                if cr > 0.0 { cost += (ca as f64) / cr; }
-            }
-
-            if cost > 0.0 {
-                if let Some(decimal_cost) = rust_decimal::Decimal::from_f64(cost) {
-                    let _ = crate::db::deduct_credit(&pool, org_id, decimal_cost, &log_id.to_string()).await;
-                    let money = decimal_cost * meta.credit_price;
-                    let _ = sqlx::query("UPDATE request_logs SET credit_cost = $1, money_cost = $3, is_long_context = $4 WHERE id = $2")
-                        .bind(decimal_cost)
-                        .bind(log_id)
-                        .bind(money)
-                        .bind(is_long_context)
-                        .execute(&pool)
-                        .await;
-                }
-            } else if is_long_context {
-                let _ = sqlx::query("UPDATE request_logs SET is_long_context = $2 WHERE id = $1")
-                    .bind(log_id)
-                    .bind(true)
-                    .execute(&pool)
-                    .await;
-            }
+            deduct_credits(&pool, org_id, log_id, meta.model.as_deref(), meta.credit_price, &usage).await;
         }
     });
 
@@ -659,60 +682,8 @@ async fn handle_streaming_response(
 
         if is_passthrough { return; }
 
-        // 扣除积分
         if status_str == "success" {
-            let rates = crate::db::get_credit_rates(&pool_clone).await;
-
-            // 判断是否触发长上下文：输入 Token >= 阈值且长上下文比例已配置
-            let is_long_context = rates.long_context_threshold
-                .filter(|&t| t > 0)
-                .and_then(|threshold| {
-                    usage.prompt_tokens.map(|p| (p as u64) >= threshold)
-                })
-                .unwrap_or(false)
-                && rates.long_context_input_rate.is_some();
-
-            // 根据是否长上下文选择对应的比例
-            let (ir, or, cr) = if is_long_context {
-                (
-                    rates.long_context_input_rate.unwrap_or(rates.input_rate),
-                    rates.long_context_output_rate.unwrap_or(rates.output_rate),
-                    rates.long_context_cached_rate.unwrap_or(rates.cached_rate),
-                )
-            } else {
-                (rates.input_rate, rates.output_rate, rates.cached_rate)
-            };
-
-            let mut cost = 0.0;
-            if let Some(p) = usage.prompt_tokens {
-                if ir > 0.0 { cost += (p as f64) / ir; }
-            }
-            if let Some(c) = usage.completion_tokens {
-                if or > 0.0 { cost += (c as f64) / or; }
-            }
-            if let Some(ca) = usage.cached_tokens {
-                if cr > 0.0 { cost += (ca as f64) / cr; }
-            }
-
-            if cost > 0.0 {
-                if let Some(decimal_cost) = rust_decimal::Decimal::from_f64(cost) {
-                    let _ = crate::db::deduct_credit(&pool_clone, org_id, decimal_cost, &log_id.to_string()).await;
-                    let money = decimal_cost * meta.credit_price;
-                    let _ = sqlx::query("UPDATE request_logs SET credit_cost = $1, money_cost = $3, is_long_context = $4 WHERE id = $2")
-                        .bind(decimal_cost)
-                        .bind(log_id)
-                        .bind(money)
-                        .bind(is_long_context)
-                        .execute(&pool_clone)
-                        .await;
-                }
-            } else if is_long_context {
-                let _ = sqlx::query("UPDATE request_logs SET is_long_context = $2 WHERE id = $1")
-                    .bind(log_id)
-                    .bind(true)
-                    .execute(&pool_clone)
-                    .await;
-            }
+            deduct_credits(&pool_clone, org_id, log_id, meta.model.as_deref(), meta.credit_price, &usage).await;
         }
     });
 

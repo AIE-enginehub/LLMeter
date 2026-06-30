@@ -1332,199 +1332,281 @@
         
         <!-- ==================== 系统设置 Tab ==================== -->
         <div x-show="tab === 'settings'" x-transition class="anim-fade-in-up" x-data="settingsTab()" x-init="load()">
-          <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-6 max-w-2xl">
-            <h3 class="text-base font-semibold text-slate-800 mb-6" x-text="t('credit_rate_setting')"></h3>
-            <p class="text-xs text-slate-500 mb-6" x-text="t('credit_rate_desc')"></p>
-            
-            <div class="space-y-4">
-              <div>
-                <label class="block text-sm text-slate-600 mb-1.5" x-text="t('input_rate')"></label>
-                <div class="flex items-center gap-2">
-                  <input x-model.number="rates.input_rate" type="number" step="0.01" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-                  <span class="text-sm text-slate-400 whitespace-nowrap">Tokens / Credit</span>
-                </div>
-              </div>
-              <div>
-                <label class="block text-sm text-slate-600 mb-1.5" x-text="t('output_rate')"></label>
-                <div class="flex items-center gap-2">
-                  <input x-model.number="rates.output_rate" type="number" step="0.01" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-                  <span class="text-sm text-slate-400 whitespace-nowrap">Tokens / Credit</span>
-                </div>
-              </div>
-              <div>
-                <label class="block text-sm text-slate-600 mb-1.5" x-text="t('cached_rate')"></label>
-                <div class="flex items-center gap-2">
-                  <input x-model.number="rates.cached_rate" type="number" step="0.01" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-                  <span class="text-sm text-slate-400 whitespace-nowrap">Tokens / Credit</span>
-                </div>
-              </div>
 
-              <!-- 长上下文独立比例配置 -->
-              <div class="pt-4 mt-2 border-t border-slate-100">
-                <h4 class="text-sm font-medium text-slate-700 mb-1" x-text="t('long_context_title')"></h4>
-                <p class="text-xs text-slate-400 mb-4" x-text="t('long_context_desc')"></p>
-                <div class="space-y-4">
-                  <div>
-                    <label class="block text-sm text-slate-600 mb-1.5" x-text="t('long_context_threshold')"></label>
-                    <div class="flex items-center gap-2">
-                      <input x-model.number="rates.long_context_threshold" type="number" step="1" min="0" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="0">
-                      <span class="text-sm text-slate-400 whitespace-nowrap">Tokens</span>
+          <!-- 子标签导航 -->
+          <div class="flex gap-1 mb-6 bg-slate-100 rounded-lg p-1 max-w-2xl">
+            <template x-for="st in ['model_rates','mail','compression','password']" :key="st">
+              <button @click="subTab = st"
+                :class="subTab === st ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+                class="flex-1 px-4 py-2 text-sm font-medium rounded-md transition"
+                x-text="t('settings_tab_' + st)"></button>
+            </template>
+          </div>
+
+          <!-- ── 子标签：模型积分比例 ── -->
+          <div x-show="subTab === 'model_rates'" x-transition class="space-y-6 max-w-2xl">
+
+            <!-- 按模型配置的比例 -->
+            <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-6">
+              <div class="flex items-center justify-between mb-1">
+                <h3 class="text-base font-semibold text-slate-800" x-text="t('model_credit_rates_title')"></h3>
+                <button @click="openAddRate()" class="px-3 py-1.5 text-xs bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition shadow-sm" x-text="t('add_model_rate')"></button>
+              </div>
+              <p class="text-xs text-slate-500 mb-5" x-text="t('model_credit_rates_desc')"></p>
+
+              <!-- 空状态 -->
+              <div x-show="modelRates.length === 0" class="text-center py-6 text-sm text-slate-400" x-text="t('no_model_rates')"></div>
+
+              <!-- 列表 -->
+              <div x-show="modelRates.length > 0" class="space-y-2.5">
+                <template x-for="r in modelRates" :key="r.id">
+                  <div class="border rounded-lg px-4 py-3 group transition cursor-pointer hover:shadow-sm"
+                    :class="r.model_name === 'default' ? 'border-blue-200 bg-blue-50/40' : 'border-slate-200 bg-white hover:border-slate-300'"
+                    @click="openEditRate(r)">
+                    <div class="flex items-center justify-between">
+                      <div class="flex items-center gap-2.5">
+                        <span class="text-sm font-semibold"
+                          :class="r.model_name === 'default' ? 'text-blue-700' : 'text-slate-800'"
+                          x-text="r.model_name === 'default' ? 'Default' : r.model_name"></span>
+                      </div>
+                      <div class="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition">
+                        <button @click.stop="openEditRate(r)" class="text-xs text-blue-600 hover:text-blue-800 transition" x-text="t('edit')"></button>
+                        <button x-show="r.model_name !== 'default'" @click.stop="deleteRate(r.id)" class="text-xs text-red-500 hover:text-red-700 transition" x-text="t('delete')"></button>
+                      </div>
+                    </div>
+                    <div class="mt-2 text-xs">
+                      <div class="grid gap-y-1" style="grid-template-columns: 7rem repeat(3, 5rem) 2rem;">
+                        <span class="text-slate-500" x-text="t('rate_normal')"></span>
+                        <span><span x-text="t('rate_in')"></span> <span class="font-medium text-slate-700" x-text="r.input_rate"></span></span>
+                        <span><span x-text="t('rate_out')"></span> <span class="font-medium text-slate-700" x-text="r.output_rate"></span></span>
+                        <span><span x-text="t('rate_cache')"></span> <span class="font-medium text-slate-700" x-text="r.cached_rate"></span></span>
+                        <span class="text-slate-300">T/C</span>
+                        <template x-if="r.long_context_threshold">
+                          <span class="text-amber-600 font-medium" x-text="t('long_ctx_tag') + ' ≥' + r.long_context_threshold.toLocaleString()"></span>
+                        </template>
+                        <template x-if="r.long_context_threshold">
+                          <span><span x-text="t('rate_in')"></span> <span class="font-medium text-amber-700" x-text="r.long_context_input_rate || '-'"></span></span>
+                        </template>
+                        <template x-if="r.long_context_threshold">
+                          <span><span x-text="t('rate_out')"></span> <span class="font-medium text-amber-700" x-text="r.long_context_output_rate || '-'"></span></span>
+                        </template>
+                        <template x-if="r.long_context_threshold">
+                          <span><span x-text="t('rate_cache')"></span> <span class="font-medium text-amber-700" x-text="r.long_context_cached_rate || '-'"></span></span>
+                        </template>
+                        <template x-if="r.long_context_threshold">
+                          <span class="text-slate-300">T/C</span>
+                        </template>
+                      </div>
                     </div>
                   </div>
-                  <div class="grid grid-cols-3 gap-4">
-                    <div>
-                      <label class="block text-sm text-slate-600 mb-1.5" x-text="t('lc_input_rate')"></label>
-                      <div class="flex items-center gap-2">
-                        <input x-model.number="rates.long_context_input_rate" type="number" step="0.01" min="0" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="0">
-                        <span class="text-sm text-slate-400 whitespace-nowrap">T/C</span>
+                </template>
+              </div>
+
+              <!-- 编辑弹窗 -->
+              <template x-teleport="body">
+              <template x-if="editingRate">
+                <div class="fixed inset-0 bg-black/30 z-[9999] flex items-center justify-center" @click.self="editingRate = null">
+                  <div class="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-slate-100">
+                      <h3 class="text-base font-semibold text-slate-800" x-text="editingRate.id ? t('edit_model_rate') : t('add_model_rate')"></h3>
+                    </div>
+                    <div class="px-6 py-5 space-y-5">
+                      <!-- 模型名称 -->
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 mb-1" x-text="t('model_name')"></label>
+                        <input x-model="editingRate.model_name" :placeholder="t('model_name_placeholder')"
+                          :readonly="editingRate.model_name === 'default'"
+                          :class="editingRate.model_name === 'default' ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : 'bg-slate-50'"
+                          class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                      </div>
+
+                      <!-- 标准比例 -->
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 mb-2" x-text="t('credit_rate_setting')"></label>
+                        <div class="grid grid-cols-3 gap-3">
+                          <div>
+                            <label class="block text-xs text-slate-400 mb-1" x-text="t('input_rate')"></label>
+                            <input x-model.number="editingRate.input_rate" type="number" step="0.01" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                          </div>
+                          <div>
+                            <label class="block text-xs text-slate-400 mb-1" x-text="t('output_rate')"></label>
+                            <input x-model.number="editingRate.output_rate" type="number" step="0.01" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                          </div>
+                          <div>
+                            <label class="block text-xs text-slate-400 mb-1" x-text="t('cached_rate')"></label>
+                            <input x-model.number="editingRate.cached_rate" type="number" step="0.01" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- 长上下文比例 -->
+                      <div class="pt-2 border-t border-slate-100">
+                        <label class="block text-xs font-medium text-slate-500 mb-1" x-text="t('long_context_title')"></label>
+                        <p class="text-xs text-slate-400 mb-2" x-text="t('long_context_desc')"></p>
+                        <div class="space-y-3">
+                          <div>
+                            <label class="block text-xs text-slate-400 mb-1" x-text="t('long_context_threshold')"></label>
+                            <div class="flex items-center gap-2">
+                              <input x-model.number="editingRate.long_context_threshold" type="number" step="1" min="0" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="0">
+                              <span class="text-xs text-slate-400 whitespace-nowrap">Tokens</span>
+                            </div>
+                          </div>
+                          <div class="grid grid-cols-3 gap-3">
+                            <div>
+                              <label class="block text-xs text-slate-400 mb-1" x-text="t('lc_input_rate')"></label>
+                              <input x-model.number="editingRate.long_context_input_rate" type="number" step="0.01" min="0" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="0">
+                            </div>
+                            <div>
+                              <label class="block text-xs text-slate-400 mb-1" x-text="t('lc_output_rate')"></label>
+                              <input x-model.number="editingRate.long_context_output_rate" type="number" step="0.01" min="0" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="0">
+                            </div>
+                            <div>
+                              <label class="block text-xs text-slate-400 mb-1" x-text="t('lc_cached_rate')"></label>
+                              <input x-model.number="editingRate.long_context_cached_rate" type="number" step="0.01" min="0" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="0">
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                    <div>
-                      <label class="block text-sm text-slate-600 mb-1.5" x-text="t('lc_output_rate')"></label>
-                      <div class="flex items-center gap-2">
-                        <input x-model.number="rates.long_context_output_rate" type="number" step="0.01" min="0" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="0">
-                        <span class="text-sm text-slate-400 whitespace-nowrap">T/C</span>
-                      </div>
-                    </div>
-                    <div>
-                      <label class="block text-sm text-slate-600 mb-1.5" x-text="t('lc_cached_rate')"></label>
-                      <div class="flex items-center gap-2">
-                        <input x-model.number="rates.long_context_cached_rate" type="number" step="0.01" min="0" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="0">
-                        <span class="text-sm text-slate-400 whitespace-nowrap">T/C</span>
-                      </div>
+                    <div class="px-6 py-3 bg-slate-50 border-t border-slate-100 flex justify-end gap-2">
+                      <button @click="editingRate = null" class="px-4 py-2 text-sm border border-slate-200 rounded-lg hover:bg-white transition" x-text="t('cancel')"></button>
+                      <button @click="saveRate()" class="px-5 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition shadow-sm" x-text="t('save_settings')"></button>
                     </div>
                   </div>
                 </div>
-              </div>
+              </template>
+              </template>
+            </div>
 
-              <div class="pt-4 border-t border-slate-100 flex justify-end">
-                <button @click="save()" class="px-5 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition shadow-sm" x-text="t('save_settings')"></button>
+          </div>
+
+          <!-- ── 子标签：邮件配置 ── -->
+          <div x-show="subTab === 'mail'" x-transition class="max-w-2xl">
+            <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-6">
+              <h3 class="text-base font-semibold text-slate-800 mb-6" x-text="t('mail_setting')"></h3>
+              <p class="text-xs text-slate-500 mb-6" x-text="t('mail_setting_desc')"></p>
+              <div class="space-y-6">
+                <div class="pt-1">
+                  <h4 class="text-sm font-medium text-slate-700 mb-3" x-text="t('mail_outbound')"></h4>
+                  <div class="grid grid-cols-2 gap-3">
+                    <div>
+                      <label class="block text-sm text-slate-600 mb-1.5">SMTP Host</label>
+                      <input x-model="mail.outbound.host" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                    </div>
+                    <div>
+                      <label class="block text-sm text-slate-600 mb-1.5">SMTP Port</label>
+                      <input x-model.number="mail.outbound.port" type="number" min="1" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                    </div>
+                    <div>
+                      <label class="block text-sm text-slate-600 mb-1.5" x-text="t('mail_username')"></label>
+                      <input x-model="mail.outbound.username" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                    </div>
+                    <div>
+                      <label class="block text-sm text-slate-600 mb-1.5" x-text="t('mail_password')"></label>
+                      <input x-model="mail.outbound.password" type="password" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                    </div>
+                    <div>
+                      <label class="block text-sm text-slate-600 mb-1.5" x-text="t('mail_sender_email')"></label>
+                      <input x-model="mail.outbound.sender_email" type="email" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                    </div>
+                    <div>
+                      <label class="block text-sm text-slate-600 mb-1.5" x-text="t('mail_sender_name')"></label>
+                      <input x-model="mail.outbound.sender_name" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                    </div>
+                  </div>
+                  <label class="mt-3 inline-flex items-center gap-2 text-sm text-slate-600">
+                    <input type="checkbox" x-model="mail.outbound.use_tls">
+                    <span x-text="t('mail_use_tls')"></span>
+                  </label>
+                </div>
+                <div class="pt-4 border-t border-slate-100 flex justify-end">
+                  <button @click="saveMail()" class="px-5 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition shadow-sm" x-text="t('save_settings')"></button>
+                </div>
               </div>
             </div>
           </div>
 
-          <!-- 邮件收发配置 -->
-          <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-6 max-w-2xl mt-6">
-            <h3 class="text-base font-semibold text-slate-800 mb-6" x-text="t('mail_setting')"></h3>
-            <p class="text-xs text-slate-500 mb-6" x-text="t('mail_setting_desc')"></p>
-
-            <div class="space-y-6">
-              <div class="pt-1">
-                <h4 class="text-sm font-medium text-slate-700 mb-3" x-text="t('mail_outbound')"></h4>
-                <div class="grid grid-cols-2 gap-3">
-                  <div>
-                    <label class="block text-sm text-slate-600 mb-1.5">SMTP Host</label>
-                    <input x-model="mail.outbound.host" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-                  </div>
-                  <div>
-                    <label class="block text-sm text-slate-600 mb-1.5">SMTP Port</label>
-                    <input x-model.number="mail.outbound.port" type="number" min="1" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-                  </div>
-                  <div>
-                    <label class="block text-sm text-slate-600 mb-1.5" x-text="t('mail_username')"></label>
-                    <input x-model="mail.outbound.username" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-                  </div>
-                  <div>
-                    <label class="block text-sm text-slate-600 mb-1.5" x-text="t('mail_password')"></label>
-                    <input x-model="mail.outbound.password" type="password" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-                  </div>
-                  <div>
-                    <label class="block text-sm text-slate-600 mb-1.5" x-text="t('mail_sender_email')"></label>
-                    <input x-model="mail.outbound.sender_email" type="email" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-                  </div>
-                  <div>
-                    <label class="block text-sm text-slate-600 mb-1.5" x-text="t('mail_sender_name')"></label>
-                    <input x-model="mail.outbound.sender_name" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-                  </div>
-                </div>
-                <label class="mt-3 inline-flex items-center gap-2 text-sm text-slate-600">
-                  <input type="checkbox" x-model="mail.outbound.use_tls">
-                  <span x-text="t('mail_use_tls')"></span>
+          <!-- ── 子标签：提示词压缩 ── -->
+          <div x-show="subTab === 'compression'" x-transition class="max-w-2xl">
+            <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-6">
+              <h3 class="text-base font-semibold text-slate-800 mb-1" x-text="t('compression_title')"></h3>
+              <p class="text-xs text-slate-500 mb-6" x-text="t('compression_desc')"></p>
+              <div class="space-y-4">
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" x-model="compression.enabled" class="rounded border-slate-300">
+                  <span class="text-sm text-slate-700" x-text="t('compression_enabled')"></span>
                 </label>
-              </div>
-
-              <div class="pt-4 border-t border-slate-100 flex justify-end">
-                <button @click="saveMail()" class="px-5 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition shadow-sm" x-text="t('save_settings')"></button>
-              </div>
-            </div>
-          </div>
-
-          <!-- 提示词压缩 / Prompt compression -->
-          <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-6 max-w-2xl mt-6">
-            <h3 class="text-base font-semibold text-slate-800 mb-1" x-text="t('compression_title')"></h3>
-            <p class="text-xs text-slate-500 mb-6" x-text="t('compression_desc')"></p>
-            <div class="space-y-4">
-              <label class="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" x-model="compression.enabled" class="rounded border-slate-300">
-                <span class="text-sm text-slate-700" x-text="t('compression_enabled')"></span>
-              </label>
-              <div>
-                <label class="block text-sm text-slate-600 mb-1.5" x-text="t('compression_scope')"></label>
-                <div class="flex items-center gap-5">
-                  <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" x-model="compression.scope.system" class="rounded border-slate-300"><span class="text-sm text-slate-600">system</span></label>
-                  <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" x-model="compression.scope.user" class="rounded border-slate-300"><span class="text-sm text-slate-600">user</span></label>
-                  <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" x-model="compression.scope.assistant" class="rounded border-slate-300"><span class="text-sm text-slate-600">assistant</span></label>
-                </div>
-              </div>
-              <div class="grid grid-cols-2 gap-4">
                 <div>
-                  <label class="block text-sm text-slate-600 mb-1.5" x-text="t('compression_min_field_chars')"></label>
-                  <input x-model.number="compression.min_field_chars" type="number" step="1" min="0" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                  <label class="block text-sm text-slate-600 mb-1.5" x-text="t('compression_scope')"></label>
+                  <div class="flex items-center gap-5">
+                    <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" x-model="compression.scope.system" class="rounded border-slate-300"><span class="text-sm text-slate-600">system</span></label>
+                    <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" x-model="compression.scope.user" class="rounded border-slate-300"><span class="text-sm text-slate-600">user</span></label>
+                    <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" x-model="compression.scope.assistant" class="rounded border-slate-300"><span class="text-sm text-slate-600">assistant</span></label>
+                  </div>
                 </div>
-                <div>
-                  <label class="block text-sm text-slate-600 mb-1.5" x-text="t('compression_min_savings_pct')"></label>
-                  <input x-model.number="compression.min_savings_pct" type="number" step="1" min="0" max="100" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-2 focus:ring-slate-300 transition">
+                <div class="grid grid-cols-2 gap-4">
+                  <div>
+                    <label class="block text-sm text-slate-600 mb-1.5" x-text="t('compression_min_field_chars')"></label>
+                    <input x-model.number="compression.min_field_chars" type="number" step="1" min="0" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                  </div>
+                  <div>
+                    <label class="block text-sm text-slate-600 mb-1.5" x-text="t('compression_min_savings_pct')"></label>
+                    <input x-model.number="compression.min_savings_pct" type="number" step="1" min="0" max="100" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                  </div>
                 </div>
-              </div>
-              <label class="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" x-model="compression.emit_response_header" class="rounded border-slate-300">
-                <span class="text-sm text-slate-700" x-text="t('compression_emit_header')"></span>
-              </label>
-              <div class="pt-4 border-t border-slate-100 flex justify-end">
-                <button @click="saveCompression()" class="px-5 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition shadow-sm" x-text="t('save_settings')"></button>
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" x-model="compression.emit_response_header" class="rounded border-slate-300">
+                  <span class="text-sm text-slate-700" x-text="t('compression_emit_header')"></span>
+                </label>
+                <div class="pt-4 border-t border-slate-100 flex justify-end">
+                  <button @click="saveCompression()" class="px-5 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition shadow-sm" x-text="t('save_settings')"></button>
+                </div>
               </div>
             </div>
           </div>
 
-          <!-- 修改密码 -->
-          <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-6 max-w-2xl mt-6">
-            <h3 class="text-base font-semibold text-slate-800 mb-6" x-text="t('change_pwd')"></h3>
-            <div class="space-y-4">
-              <div>
-                <label class="block text-sm text-slate-600 mb-1.5" x-text="t('old_pwd')"></label>
-                <div class="relative">
-                  <input x-model="pwdForm.old_password" :type="showOldPwd ? 'text' : 'password'" class="w-full px-3 py-2 pr-10 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-                  <button type="button" @click="showOldPwd = !showOldPwd" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition">
-                    <svg x-show="!showOldPwd" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                    <svg x-show="showOldPwd" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"/></svg>
-                  </button>
+          <!-- ── 子标签：修改密码 ── -->
+          <div x-show="subTab === 'password'" x-transition class="max-w-2xl">
+            <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-6">
+              <h3 class="text-base font-semibold text-slate-800 mb-6" x-text="t('change_pwd')"></h3>
+              <div class="space-y-4">
+                <div>
+                  <label class="block text-sm text-slate-600 mb-1.5" x-text="t('old_pwd')"></label>
+                  <div class="relative">
+                    <input x-model="pwdForm.old_password" :type="showOldPwd ? 'text' : 'password'" class="w-full px-3 py-2 pr-10 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                    <button type="button" @click="showOldPwd = !showOldPwd" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition">
+                      <svg x-show="!showOldPwd" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                      <svg x-show="showOldPwd" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"/></svg>
+                    </button>
+                  </div>
                 </div>
-              </div>
-              <div>
-                <label class="block text-sm text-slate-600 mb-1.5" x-text="t('new_pwd')"></label>
-                <div class="relative">
-                  <input x-model="pwdForm.new_password" :type="showNewPwd ? 'text' : 'password'" class="w-full px-3 py-2 pr-10 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-                  <button type="button" @click="showNewPwd = !showNewPwd" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition">
-                    <svg x-show="!showNewPwd" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                    <svg x-show="showNewPwd" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"/></svg>
-                  </button>
+                <div>
+                  <label class="block text-sm text-slate-600 mb-1.5" x-text="t('new_pwd')"></label>
+                  <div class="relative">
+                    <input x-model="pwdForm.new_password" :type="showNewPwd ? 'text' : 'password'" class="w-full px-3 py-2 pr-10 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                    <button type="button" @click="showNewPwd = !showNewPwd" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition">
+                      <svg x-show="!showNewPwd" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                      <svg x-show="showNewPwd" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"/></svg>
+                    </button>
+                  </div>
                 </div>
-              </div>
-              <div>
-                <label class="block text-sm text-slate-600 mb-1.5" x-text="t('confirm_pwd')"></label>
-                <div class="relative">
-                  <input x-model="pwdForm.confirm_password" :type="showConfirmPwd ? 'text' : 'password'" class="w-full px-3 py-2 pr-10 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
-                  <button type="button" @click="showConfirmPwd = !showConfirmPwd" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition">
-                    <svg x-show="!showConfirmPwd" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                    <svg x-show="showConfirmPwd" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"/></svg>
-                  </button>
+                <div>
+                  <label class="block text-sm text-slate-600 mb-1.5" x-text="t('confirm_pwd')"></label>
+                  <div class="relative">
+                    <input x-model="pwdForm.confirm_password" :type="showConfirmPwd ? 'text' : 'password'" class="w-full px-3 py-2 pr-10 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                    <button type="button" @click="showConfirmPwd = !showConfirmPwd" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition">
+                      <svg x-show="!showConfirmPwd" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                      <svg x-show="showConfirmPwd" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"/></svg>
+                    </button>
+                  </div>
                 </div>
-              </div>
-              <div class="pt-4 border-t border-slate-100 flex justify-end">
-                <button @click="changePassword()" class="px-5 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition shadow-sm" x-text="t('change_pwd')"></button>
+                <div class="pt-4 border-t border-slate-100 flex justify-end">
+                  <button @click="changePassword()" class="px-5 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition shadow-sm" x-text="t('change_pwd')"></button>
+                </div>
               </div>
             </div>
           </div>
+
         </div>
 
       </main>

@@ -1,9 +1,13 @@
 /**
- * 系统设置 Tab — 积分扣除比例配置 + 修改密码
+ * 系统设置 Tab — 子标签切换 + 各分区配置
  */
 function settingsTab() {
   return {
-    rates: { input_rate: 1221, output_rate: 203.5, cached_rate: 12210, long_context_threshold: null, long_context_input_rate: null, long_context_output_rate: null, long_context_cached_rate: null },
+    subTab: 'model_rates',
+
+    modelRates: [],
+    editingRate: null,
+
     mail: {
       outbound: { host: '', port: 587, username: '', password: '', sender_email: '', sender_name: '', use_tls: true },
     },
@@ -15,7 +19,7 @@ function settingsTab() {
 
     async load() {
       try {
-        this.rates = await api('/api/settings/credit_rates');
+        this.modelRates = await api('/api/settings/model_credit_rates');
         this.mail = await api('/api/settings/mail');
       } catch (e) { window.showToast(e.message, 'error'); }
       try {
@@ -23,22 +27,53 @@ function settingsTab() {
       } catch (e) { window.showToast(e.message, 'error'); }
     },
 
-    async saveCompression() {
+    openAddRate() {
+      this.editingRate = {
+        id: null, model_name: '',
+        input_rate: 316, output_rate: 52, cached_rate: 3160,
+        long_context_threshold: 272000, long_context_input_rate: 158, long_context_output_rate: 35, long_context_cached_rate: 1580,
+      };
+    },
+    openEditRate(r) {
+      this.editingRate = { ...r };
+    },
+    async saveRate() {
+      if (!this.editingRate.model_name.trim()) {
+        window.showToast(t('model_name_required'), 'error');
+        return;
+      }
       try {
-        await api('/api/settings/compression', { method: 'PUT', body: JSON.stringify(this.compression) });
+        const e = this.editingRate;
+        const payload = {
+          model_name: e.model_name.trim(),
+          input_rate: e.input_rate, output_rate: e.output_rate, cached_rate: e.cached_rate,
+          long_context_threshold: e.long_context_threshold || null,
+          long_context_input_rate: e.long_context_input_rate || null,
+          long_context_output_rate: e.long_context_output_rate || null,
+          long_context_cached_rate: e.long_context_cached_rate || null,
+        };
+        if (e.id) {
+          await api(`/api/settings/model_credit_rates/${e.id}`, { method: 'PUT', body: JSON.stringify(payload) });
+        } else {
+          await api('/api/settings/model_credit_rates', { method: 'POST', body: JSON.stringify(payload) });
+        }
+        this.editingRate = null;
+        this.modelRates = await api('/api/settings/model_credit_rates');
+        window.showToast(t('save_success'));
+      } catch (e) { window.showToast(e.message, 'error'); }
+    },
+    async deleteRate(id) {
+      if (!confirm(t('confirm_action'))) return;
+      try {
+        await api(`/api/settings/model_credit_rates/${id}`, { method: 'DELETE' });
+        this.modelRates = await api('/api/settings/model_credit_rates');
         window.showToast(t('save_success'));
       } catch (e) { window.showToast(e.message, 'error'); }
     },
 
-    async save() {
+    async saveCompression() {
       try {
-        const payload = { ...this.rates };
-        // 阈值和比例为 0 或空时视为未配置
-        if (!payload.long_context_threshold) payload.long_context_threshold = null;
-        if (!payload.long_context_input_rate) payload.long_context_input_rate = null;
-        if (!payload.long_context_output_rate) payload.long_context_output_rate = null;
-        if (!payload.long_context_cached_rate) payload.long_context_cached_rate = null;
-        await api('/api/settings/credit_rates', { method: 'PUT', body: JSON.stringify(payload) });
+        await api('/api/settings/compression', { method: 'PUT', body: JSON.stringify(this.compression) });
         window.showToast(t('save_success'));
       } catch (e) { window.showToast(e.message, 'error'); }
     },

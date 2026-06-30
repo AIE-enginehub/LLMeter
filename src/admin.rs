@@ -129,6 +129,8 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/settings/mail", get(get_mail_settings).put(update_mail_settings))
         .route("/api/settings/compression", get(get_compression).put(update_compression))
+        .route("/api/settings/model_credit_rates", get(list_model_credit_rates).post(create_model_credit_rate))
+        .route("/api/settings/model_credit_rates/{id}", put(update_model_credit_rate).delete(delete_model_credit_rate))
         .route("/api/usage/export_report", post(export_usage_report))
         .route("/api/orgs/{id}/credit", post(recharge_credit))
         .route("/api/orgs/{id}/credit_logs", get(list_credit_logs))
@@ -1955,4 +1957,111 @@ async fn get_stats(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(StatsResponse { overview, by_org, by_project, by_model, daily_stats }))
+}
+
+// ============================================================
+// 模型积分扣除比例 CRUD
+// ============================================================
+
+/// GET /api/settings/model_credit_rates — 列出所有模型积分扣除比例
+async fn list_model_credit_rates(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+) -> Result<Json<Vec<crate::db::ModelCreditRate>>, (StatusCode, Json<ErrorResponse>)> {
+    let rows = crate::db::list_model_credit_rates(&state.pool).await;
+    Ok(Json(rows))
+}
+
+#[derive(Deserialize)]
+struct CreateModelCreditRate {
+    model_name: String,
+    input_rate: f64,
+    output_rate: f64,
+    cached_rate: f64,
+    #[serde(default)]
+    long_context_threshold: Option<i64>,
+    #[serde(default)]
+    long_context_input_rate: Option<f64>,
+    #[serde(default)]
+    long_context_output_rate: Option<f64>,
+    #[serde(default)]
+    long_context_cached_rate: Option<f64>,
+}
+
+/// POST /api/settings/model_credit_rates — 新建模型积分扣除比例
+async fn create_model_credit_rate(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+    Json(body): Json<CreateModelCreditRate>,
+) -> Result<Json<crate::db::ModelCreditRate>, (StatusCode, Json<ErrorResponse>)> {
+    let row = sqlx::query_as::<_, crate::db::ModelCreditRate>(
+        &format!(
+            "INSERT INTO model_credit_rates (model_name, input_rate, output_rate, cached_rate, \
+                    long_context_threshold, long_context_input_rate, long_context_output_rate, long_context_cached_rate) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             RETURNING {}", crate::db::MODEL_RATE_COLS
+        )
+    )
+    .bind(body.model_name.trim())
+    .bind(body.input_rate)
+    .bind(body.output_rate)
+    .bind(body.cached_rate)
+    .bind(body.long_context_threshold)
+    .bind(body.long_context_input_rate)
+    .bind(body.long_context_output_rate)
+    .bind(body.long_context_cached_rate)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(friendly_db_err)?;
+    Ok(Json(row))
+}
+
+/// PUT /api/settings/model_credit_rates/:id — 更新模型积分扣除比例
+async fn update_model_credit_rate(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<CreateModelCreditRate>,
+) -> Result<Json<crate::db::ModelCreditRate>, (StatusCode, Json<ErrorResponse>)> {
+    let row = sqlx::query_as::<_, crate::db::ModelCreditRate>(
+        &format!(
+            "UPDATE model_credit_rates SET \
+                model_name = $2, input_rate = $3, output_rate = $4, cached_rate = $5, \
+                long_context_threshold = $6, long_context_input_rate = $7, long_context_output_rate = $8, long_context_cached_rate = $9, \
+                updated_at = now() \
+             WHERE id = $1 \
+             RETURNING {}", crate::db::MODEL_RATE_COLS
+        )
+    )
+    .bind(id)
+    .bind(body.model_name.trim())
+    .bind(body.input_rate)
+    .bind(body.output_rate)
+    .bind(body.cached_rate)
+    .bind(body.long_context_threshold)
+    .bind(body.long_context_input_rate)
+    .bind(body.long_context_output_rate)
+    .bind(body.long_context_cached_rate)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(friendly_db_err)?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Model credit rate not found"))?;
+    Ok(Json(row))
+}
+
+/// DELETE /api/settings/model_credit_rates/:id — 删除模型积分扣除比例（default 不可删除）
+async fn delete_model_credit_rate(
+    State(state): State<Arc<AppState>>,
+    _admin: AuthAdmin,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let deleted = sqlx::query("DELETE FROM model_credit_rates WHERE id = $1 AND model_name != 'default'")
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .map_err(friendly_db_err)?;
+    if deleted.rows_affected() == 0 {
+        return Err(err(StatusCode::FORBIDDEN, "默认比例不可删除 / Cannot delete default rate"));
+    }
+    Ok(StatusCode::NO_CONTENT)
 }

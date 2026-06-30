@@ -88,6 +88,7 @@ pub async fn run_migrations(pool: &PgPool) {
         ("007_project_data_migration", include_str!("../migrations/007_project_data_migration.sql")),
         ("008_credit_price",        include_str!("../migrations/008_credit_price.sql")),
         ("009_prompt_compression",  include_str!("../migrations/009_prompt_compression.sql")),
+        ("010_model_credit_rates",  include_str!("../migrations/010_model_credit_rates.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -403,5 +404,62 @@ pub async fn find_all_model_configs(
     }).collect()
 }
 
+// ============================================================
+// 模型积分扣除比例
+// ============================================================
 
+/// 按模型名称配置的独立积分扣除比例（精确匹配模型名称）
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
+pub struct ModelCreditRate {
+    pub id: Uuid,
+    pub model_name: String,
+    pub input_rate: f64,
+    pub output_rate: f64,
+    pub cached_rate: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_context_threshold: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_context_input_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_context_output_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_context_cached_rate: Option<f64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
 
+pub const MODEL_RATE_COLS: &str = "id, model_name, input_rate, output_rate, cached_rate, \
+    long_context_threshold, long_context_input_rate, long_context_output_rate, long_context_cached_rate, \
+    created_at, updated_at";
+
+/// 按模型名称精确匹配积分扣除比例，未匹配时回退到 default 行
+pub async fn find_model_credit_rate(pool: &PgPool, model: &str) -> Option<ModelCreditRate> {
+    let row = sqlx::query_as::<_, ModelCreditRate>(
+        &format!("SELECT {MODEL_RATE_COLS} FROM model_credit_rates WHERE model_name = $1")
+    )
+    .bind(model)
+    .fetch_optional(pool)
+    .await
+    .ok()?;
+
+    if row.is_some() {
+        return row;
+    }
+
+    sqlx::query_as::<_, ModelCreditRate>(
+        &format!("SELECT {MODEL_RATE_COLS} FROM model_credit_rates WHERE model_name = 'default'")
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()?
+}
+
+/// 列出所有模型积分扣除比例配置
+pub async fn list_model_credit_rates(pool: &PgPool) -> Vec<ModelCreditRate> {
+    sqlx::query_as::<_, ModelCreditRate>(
+        &format!("SELECT {MODEL_RATE_COLS} FROM model_credit_rates ORDER BY model_name ASC")
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+}
