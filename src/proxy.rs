@@ -441,7 +441,7 @@ async fn handle_normal_response(
              request_body, response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
              total_tokens, duration_ms, error_message, response_body, \
              compressed, compression_mode, original_prompt_chars, forwarded_prompt_chars, est_tokens_saved, updated_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23, now())"
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24, now())"
         )
         .bind(log_id).bind(meta.org_id).bind(meta.project_id).bind(meta.api_key_id)
         .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
@@ -639,7 +639,7 @@ async fn handle_streaming_response(
              request_body, response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
              total_tokens, duration_ms, error_message, response_body, \
              compressed, compression_mode, original_prompt_chars, forwarded_prompt_chars, est_tokens_saved, updated_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23, now())"
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24, now())"
         )
         .bind(log_id).bind(meta.org_id).bind(meta.project_id).bind(meta.api_key_id)
         .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
