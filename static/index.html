@@ -1073,7 +1073,7 @@
               <!-- 每日请求数柱状图 -->
               <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-5 anim-fade-in-up">
                 <h3 class="text-sm font-semibold text-slate-700 mb-4" x-text="t('daily_req')"></h3>
-                <div class="overflow-x-auto" x-show="stats.daily_stats.length > 0">
+                <div class="overflow-x-auto pt-10" x-show="stats.daily_stats.length > 0">
                   <div class="flex items-end" :style="'height: 180px; gap: ' + (stats.daily_stats.length > 14 ? 2 : 6) + 'px; min-width: ' + Math.max(stats.daily_stats.length * 24, 100) + 'px'">
                     <template x-for="(d, i) in stats.daily_stats" :key="d.date">
                       <div class="flex-1 flex flex-col items-center group relative min-w-[8px]">
@@ -1096,7 +1096,7 @@
               <!-- Token 视角：每日 Token 消耗柱状图 -->
               <div x-show="perspective === 'token'" class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-5 anim-fade-in-up anim-delay-1">
                 <h3 class="text-sm font-semibold text-slate-700 mb-4" x-text="t('daily_token')"></h3>
-                <div class="overflow-x-auto" x-show="stats.daily_stats.length > 0">
+                <div class="overflow-x-auto pt-14" x-show="stats.daily_stats.length > 0">
                   <div class="flex items-end" :style="'height: 180px; gap: ' + (stats.daily_stats.length > 14 ? 2 : 6) + 'px; min-width: ' + Math.max(stats.daily_stats.length * 24, 100) + 'px'">
                     <template x-for="(d, i) in stats.daily_stats" :key="d.date">
                       <div class="flex-1 flex flex-col items-center group relative min-w-[8px]">
@@ -1124,7 +1124,7 @@
               <!-- Credit 视角：每日 Credit 消耗柱状图 -->
               <div x-show="perspective === 'credit'" class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-5 anim-fade-in-up anim-delay-1">
                 <h3 class="text-sm font-semibold text-slate-700 mb-4" x-text="t('daily_credit')"></h3>
-                <div class="overflow-x-auto" x-show="stats.daily_stats.length > 0">
+                <div class="overflow-x-auto pt-10" x-show="stats.daily_stats.length > 0">
                   <div class="flex items-end" :style="'height: 180px; gap: ' + (stats.daily_stats.length > 14 ? 2 : 6) + 'px; min-width: ' + Math.max(stats.daily_stats.length * 24, 100) + 'px'">
                     <template x-for="(d, i) in stats.daily_stats" :key="d.date">
                       <div class="flex-1 flex flex-col items-center group relative min-w-[8px]">
