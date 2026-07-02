@@ -25,6 +25,7 @@ function usageTab() {
       month: '',
       start_time: '',
       end_time: '',
+      delivery: 'download', // download | email
       recipient_email: '',
     },
 
@@ -173,7 +174,8 @@ function usageTab() {
         window.showToast(t('export_org_required'), 'error');
         return;
       }
-      if (!this.exportForm.recipient_email.trim()) {
+      const isEmail = this.exportForm.delivery === 'email';
+      if (isEmail && !this.exportForm.recipient_email.trim()) {
         window.showToast(t('export_recipient_required'), 'error');
         return;
       }
@@ -182,7 +184,8 @@ function usageTab() {
         month: null,
         start_time: null,
         end_time: null,
-        recipient_email: this.exportForm.recipient_email.trim(),
+        delivery: this.exportForm.delivery,
+        recipient_email: isEmail ? this.exportForm.recipient_email.trim() : null,
       };
       if (this.exportForm.mode === 'month') {
         if (!this.exportForm.month) {
@@ -201,12 +204,40 @@ function usageTab() {
 
       this.exportLoading = true;
       try {
-        await api('/api/usage/export_report', {
-          method: 'POST',
-          body: JSON.stringify(payload),
-        });
-        this.showExportModal = false;
-        window.showToast(t('export_success'));
+        if (isEmail) {
+          await api('/api/usage/export_report', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          });
+          this.showExportModal = false;
+          window.showToast(t('export_success'));
+        } else {
+          for (const orgId of this.exportForm.org_ids) {
+            const singlePayload = { ...payload, org_ids: [orgId] };
+            const resp = await fetch('/api/usage/export_report', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(singlePayload),
+            });
+            if (!resp.ok) {
+              const errBody = await resp.json().catch(() => null);
+              throw new Error(errBody?.error || resp.statusText);
+            }
+            const disposition = resp.headers.get('Content-Disposition') || '';
+            const match = disposition.match(/filename="?([^"]+)"?/);
+            const filename = match ? decodeURIComponent(match[1]) : 'LLMeter账单.pdf';
+            const blob = await resp.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = filename;
+            document.body.appendChild(a); a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }
+          this.showExportModal = false;
+          window.showToast(t('export_download_success'));
+        }
       } catch (e) {
         window.showToast(e.message, 'error');
       } finally {

@@ -193,6 +193,25 @@ function dateRangePicker() {
   };
 }
 
+/**
+ * 全局 fetch 拦截：任何非登录请求收到 401 时，自动清除登录态并跳转登录页
+ */
+(function() {
+  const _fetch = window.fetch;
+  window.fetch = async function(url, ...args) {
+    const resp = await _fetch.call(this, url, ...args);
+    if (resp.status === 401 && !String(url).includes('/api/auth/login')) {
+      const appEl = document.querySelector('[x-data="app()"]');
+      const data = appEl && appEl._x_dataStack && appEl._x_dataStack[0];
+      if (data && data.user !== null) {
+        data.user = null;
+        window.showToast(window.t ? window.t('session_expired') : '登录已过期，请重新登录', 'error');
+      }
+    }
+    return resp;
+  };
+})();
+
 /** 封装 fetch 请求，自动处理 JSON 和错误 */
 async function api(url, options = {}) {
   const res = await fetch(url, {
@@ -201,6 +220,7 @@ async function api(url, options = {}) {
     headers: { 'Content-Type': 'application/json', ...options.headers }
   });
   if (res.status === 204) return null;
+  if (res.status === 401) throw new Error('Unauthorized');
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(friendlyError(body.error || `Request failed (${res.status})`));

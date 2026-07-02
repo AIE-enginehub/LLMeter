@@ -1057,20 +1057,22 @@
               <!-- 每日请求数柱状图 -->
               <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-5 anim-fade-in-up">
                 <h3 class="text-sm font-semibold text-slate-700 mb-4" x-text="t('daily_req')"></h3>
-                <div class="flex items-end gap-1.5" style="height: 180px;" x-show="stats.daily_stats.length > 0">
-                  <template x-for="(d, i) in stats.daily_stats" :key="d.date">
-                    <div class="flex-1 flex flex-col items-center group relative">
-                      <div class="absolute bottom-full mb-2 hidden group-hover:block z-10">
-                        <div class="bg-slate-800 text-white text-xs rounded-lg px-3 py-1.5 whitespace-nowrap shadow-lg">
-                          <span x-text="d.date"></span>: <span x-text="formatNum(d.request_count)"></span>
+                <div class="overflow-x-auto" x-show="stats.daily_stats.length > 0">
+                  <div class="flex items-end" :style="'height: 180px; gap: ' + (stats.daily_stats.length > 14 ? 2 : 6) + 'px; min-width: ' + Math.max(stats.daily_stats.length * 24, 100) + 'px'">
+                    <template x-for="(d, i) in stats.daily_stats" :key="d.date">
+                      <div class="flex-1 flex flex-col items-center group relative min-w-[8px]">
+                        <div class="absolute bottom-full mb-2 hidden group-hover:block z-10">
+                          <div class="bg-slate-800 text-white text-xs rounded-lg px-3 py-1.5 whitespace-nowrap shadow-lg">
+                            <span x-text="d.date"></span>: <span x-text="formatNum(d.request_count)"></span>
+                          </div>
                         </div>
+                        <div class="w-full rounded-t-md bg-gradient-to-t from-blue-500 to-violet-400 transition-all duration-300 hover:from-blue-600 hover:to-violet-500 min-h-[4px]"
+                          :style="'height: ' + (maxReq > 0 ? Math.max(d.request_count / maxReq * 160, 4) : 4) + 'px'">
+                        </div>
+                        <span class="text-[10px] text-slate-400 mt-1.5 whitespace-nowrap" :class="{'invisible': stats.daily_stats.length > 14 && i % Math.ceil(stats.daily_stats.length / 14) !== 0}" x-text="d.date.slice(5)"></span>
                       </div>
-                      <div class="w-full rounded-t-md bg-gradient-to-t from-blue-500 to-violet-400 transition-all duration-300 hover:from-blue-600 hover:to-violet-500 min-h-[4px]"
-                        :style="'height: ' + (maxReq > 0 ? Math.max(d.request_count / maxReq * 160, 4) : 4) + 'px'">
-                      </div>
-                      <span class="text-[10px] text-slate-400 mt-1.5 whitespace-nowrap" x-show="stats.daily_stats.length <= 10 || i % Math.ceil(stats.daily_stats.length / 10) === 0" x-text="d.date.slice(5)"></span>
-                    </div>
-                  </template>
+                    </template>
+                  </div>
                 </div>
                 <template x-if="stats.daily_stats.length === 0"><p class="text-center text-slate-400 text-sm py-8" x-text="t('no_data')"></p></template>
               </div>
@@ -1078,25 +1080,27 @@
               <!-- Token 视角：每日 Token 消耗柱状图 -->
               <div x-show="perspective === 'token'" class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-5 anim-fade-in-up anim-delay-1">
                 <h3 class="text-sm font-semibold text-slate-700 mb-4" x-text="t('daily_token')"></h3>
-                <div class="flex items-end gap-1.5" style="height: 180px;" x-show="stats.daily_stats.length > 0">
-                  <template x-for="(d, i) in stats.daily_stats" :key="d.date">
-                    <div class="flex-1 flex flex-col items-center group relative">
-                      <div class="absolute bottom-full mb-2 hidden group-hover:block z-10">
-                        <div class="bg-slate-800 text-white text-xs rounded-lg px-3 py-1.5 whitespace-nowrap shadow-lg">
-                          <span x-text="d.date"></span>: <span x-text="fmtToken(d.total_tokens)"></span> Token
-                          <div class="text-[10px] text-slate-300 mt-1">
-                            <span x-text="t('in')"></span> <span x-text="fmtToken(d.prompt_tokens)"></span> · 
-                            <span x-text="t('out')"></span> <span x-text="fmtToken(d.completion_tokens)"></span> · 
-                            <span x-text="t('cache')"></span> <span x-text="fmtToken(d.cached_tokens)"></span>
+                <div class="overflow-x-auto" x-show="stats.daily_stats.length > 0">
+                  <div class="flex items-end" :style="'height: 180px; gap: ' + (stats.daily_stats.length > 14 ? 2 : 6) + 'px; min-width: ' + Math.max(stats.daily_stats.length * 24, 100) + 'px'">
+                    <template x-for="(d, i) in stats.daily_stats" :key="d.date">
+                      <div class="flex-1 flex flex-col items-center group relative min-w-[8px]">
+                        <div class="absolute bottom-full mb-2 hidden group-hover:block z-10">
+                          <div class="bg-slate-800 text-white text-xs rounded-lg px-3 py-1.5 whitespace-nowrap shadow-lg">
+                            <span x-text="d.date"></span>: <span x-text="fmtToken(d.total_tokens)"></span> Token
+                            <div class="text-[10px] text-slate-300 mt-1">
+                              <span x-text="t('in')"></span> <span x-text="fmtToken(d.prompt_tokens)"></span> · 
+                              <span x-text="t('out')"></span> <span x-text="fmtToken(d.completion_tokens)"></span> · 
+                              <span x-text="t('cache')"></span> <span x-text="fmtToken(d.cached_tokens)"></span>
+                            </div>
                           </div>
                         </div>
+                        <div class="w-full rounded-t-md bg-gradient-to-t from-emerald-500 to-teal-400 transition-all duration-300 hover:from-emerald-600 hover:to-teal-500 min-h-[4px]"
+                          :style="'height: ' + (maxToken > 0 ? Math.max(d.total_tokens / maxToken * 160, 4) : 4) + 'px'">
+                        </div>
+                        <span class="text-[10px] text-slate-400 mt-1.5 whitespace-nowrap" :class="{'invisible': stats.daily_stats.length > 14 && i % Math.ceil(stats.daily_stats.length / 14) !== 0}" x-text="d.date.slice(5)"></span>
                       </div>
-                      <div class="w-full rounded-t-md bg-gradient-to-t from-emerald-500 to-teal-400 transition-all duration-300 hover:from-emerald-600 hover:to-teal-500 min-h-[4px]"
-                        :style="'height: ' + (maxToken > 0 ? Math.max(d.total_tokens / maxToken * 160, 4) : 4) + 'px'">
-                      </div>
-                      <span class="text-[10px] text-slate-400 mt-1.5 whitespace-nowrap" x-show="stats.daily_stats.length <= 10 || i % Math.ceil(stats.daily_stats.length / 10) === 0" x-text="d.date.slice(5)"></span>
-                    </div>
-                  </template>
+                    </template>
+                  </div>
                 </div>
                 <template x-if="stats.daily_stats.length === 0"><p class="text-center text-slate-400 text-sm py-8" x-text="t('no_data')"></p></template>
               </div>
@@ -1104,59 +1108,25 @@
               <!-- Credit 视角：每日 Credit 消耗柱状图 -->
               <div x-show="perspective === 'credit'" class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-5 anim-fade-in-up anim-delay-1">
                 <h3 class="text-sm font-semibold text-slate-700 mb-4" x-text="t('daily_credit')"></h3>
-                <div class="flex items-end gap-1.5" style="height: 180px;" x-show="stats.daily_stats.length > 0">
-                  <template x-for="(d, i) in stats.daily_stats" :key="d.date">
-                    <div class="flex-1 flex flex-col items-center group relative">
-                      <div class="absolute bottom-full mb-2 hidden group-hover:block z-10">
-                        <div class="bg-slate-800 text-white text-xs rounded-lg px-3 py-1.5 whitespace-nowrap shadow-lg">
-                          <span x-text="d.date"></span>: <span x-text="Number(d.credit_cost || 0).toFixed(4)"></span> Credit
+                <div class="overflow-x-auto" x-show="stats.daily_stats.length > 0">
+                  <div class="flex items-end" :style="'height: 180px; gap: ' + (stats.daily_stats.length > 14 ? 2 : 6) + 'px; min-width: ' + Math.max(stats.daily_stats.length * 24, 100) + 'px'">
+                    <template x-for="(d, i) in stats.daily_stats" :key="d.date">
+                      <div class="flex-1 flex flex-col items-center group relative min-w-[8px]">
+                        <div class="absolute bottom-full mb-2 hidden group-hover:block z-10">
+                          <div class="bg-slate-800 text-white text-xs rounded-lg px-3 py-1.5 whitespace-nowrap shadow-lg">
+                            <span x-text="d.date"></span>: <span x-text="Number(d.credit_cost || 0).toFixed(4)"></span> Credit
+                          </div>
                         </div>
+                        <div class="w-full rounded-t-md bg-gradient-to-t from-indigo-500 to-purple-400 transition-all duration-300 hover:from-indigo-600 hover:to-purple-500 min-h-[4px]"
+                          :style="'height: ' + (maxCredit > 0 ? Math.max((d.credit_cost || 0) / maxCredit * 160, 4) : 4) + 'px'">
+                        </div>
+                        <span class="text-[10px] text-slate-400 mt-1.5 whitespace-nowrap" :class="{'invisible': stats.daily_stats.length > 14 && i % Math.ceil(stats.daily_stats.length / 14) !== 0}" x-text="d.date.slice(5)"></span>
                       </div>
-                      <div class="w-full rounded-t-md bg-gradient-to-t from-indigo-500 to-purple-400 transition-all duration-300 hover:from-indigo-600 hover:to-purple-500 min-h-[4px]"
-                        :style="'height: ' + (maxCredit > 0 ? Math.max((d.credit_cost || 0) / maxCredit * 160, 4) : 4) + 'px'">
-                      </div>
-                      <span class="text-[10px] text-slate-400 mt-1.5 whitespace-nowrap" x-show="stats.daily_stats.length <= 10 || i % Math.ceil(stats.daily_stats.length / 10) === 0" x-text="d.date.slice(5)"></span>
-                    </div>
-                  </template>
+                    </template>
+                  </div>
                 </div>
                 <template x-if="stats.daily_stats.length === 0"><p class="text-center text-slate-400 text-sm py-8" x-text="t('no_data')"></p></template>
               </div>
-
-              <!-- 按项目统计 -->
-              <template x-if="stats.by_project && stats.by_project.length > 0">
-                <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm anim-fade-in-up anim-delay-2">
-                  <div class="px-5 py-4 border-b border-slate-100"><h3 class="text-sm font-semibold text-slate-700" x-text="t('by_project')"></h3></div>
-                  <div class="overflow-x-auto">
-                    <table class="w-full text-sm">
-                      <thead>
-                        <tr class="text-xs text-slate-400 border-b border-slate-100">
-                          <th class="text-left px-5 py-2.5 font-medium" x-text="t('orgs')"></th>
-                          <th class="text-left px-5 py-2.5 font-medium" x-text="t('project_name')"></th>
-                          <th class="text-right px-5 py-2.5 font-medium" x-text="t('req_count')"></th>
-                          <th class="text-right px-5 py-2.5 font-medium" x-show="perspective === 'token'">Token</th>
-                          <th class="text-right px-5 py-2.5 font-medium" x-show="perspective === 'credit'" x-text="t('credit_cost')"></th>
-                          <th class="text-right px-5 py-2.5 font-medium" x-text="t('error')"></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <template x-for="p in stats.by_project" :key="p.project_id">
-                          <tr class="border-b border-slate-50 hover:bg-blue-50/50 transition">
-                            <td class="px-5 py-2.5 text-slate-500 text-xs" x-text="p.org_name"></td>
-                            <td class="px-5 py-2.5 font-medium text-slate-700" x-text="p.project_name"></td>
-                            <td class="px-5 py-2.5 text-right text-slate-600" x-text="formatNum(p.request_count)"></td>
-                            <td class="px-5 py-2.5 text-right text-slate-600" x-show="perspective === 'token'">
-                              <div x-text="fmtToken(p.total_tokens)"></div>
-                              <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(p.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(p.completion_tokens)"></span></div>
-                            </td>
-                            <td class="px-5 py-2.5 text-right text-indigo-600 font-medium" x-show="perspective === 'credit'" x-text="Number(p.total_credit_cost || 0).toFixed(4)"></td>
-                            <td class="px-5 py-2.5 text-right"><span :class="p.error_count > 0 ? 'text-red-500' : 'text-slate-400'" x-text="p.error_count"></span></td>
-                          </tr>
-                        </template>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </template>
 
               <!-- 模型使用排行 -->
               <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm anim-fade-in-up anim-delay-2">
@@ -1202,13 +1172,15 @@
             </div>
           </template>
 
+          <template x-teleport="body">
           <template x-if="showExportModal">
-            <div class="fixed inset-0 z-50 flex items-center justify-center anim-fade-in" @click.self="showExportModal = false">
+            <div class="fixed inset-0 z-[9999] flex items-center justify-center anim-fade-in" @click.self="showExportModal = false">
               <div class="absolute inset-0 bg-slate-900/20 backdrop-blur-sm"></div>
-              <div class="relative bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-2xl p-6 anim-slide-in">
+              <div class="relative bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-2xl mx-4 p-6 anim-slide-in max-h-[90vh] overflow-y-auto">
                 <h3 class="text-base font-semibold text-slate-800 mb-4" x-text="t('export_report')"></h3>
 
                 <div class="space-y-4">
+                  <!-- 企业选择 -->
                   <div>
                     <label class="block text-sm text-slate-600 mb-2" x-text="t('export_select_orgs')"></label>
                     <div class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto border border-slate-200 rounded-lg p-3">
@@ -1221,6 +1193,7 @@
                     </div>
                   </div>
 
+                  <!-- 时间模式 -->
                   <div>
                     <label class="block text-sm text-slate-600 mb-2" x-text="t('export_time_mode')"></label>
                     <div class="flex items-center gap-4 text-sm">
@@ -1235,6 +1208,7 @@
                     </div>
                   </div>
 
+                  <!-- 月份选择 -->
                   <div x-show="exportForm.mode === 'month'">
                     <label class="block text-sm text-slate-600 mb-1.5" x-text="t('export_month')"></label>
                     <div class="relative">
@@ -1257,6 +1231,7 @@
                     </div>
                   </div>
 
+                  <!-- 自定义日期 -->
                   <div x-show="exportForm.mode === 'custom'" class="grid grid-cols-2 gap-3">
                     <div class="relative">
                       <label class="block text-sm text-slate-600 mb-1.5" x-text="t('start_time')"></label>
@@ -1312,7 +1287,21 @@
                     </div>
                   </div>
 
+                  <!-- 导出方式 -->
                   <div>
+                    <label class="block text-sm text-slate-600 mb-2" x-text="t('export_delivery')"></label>
+                    <div class="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5 w-fit">
+                      <button @click="exportForm.delivery = 'download'" type="button"
+                        :class="exportForm.delivery === 'download' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'"
+                        class="px-3 py-1.5 text-sm rounded-md transition font-medium" x-text="t('export_download')"></button>
+                      <button @click="exportForm.delivery = 'email'" type="button"
+                        :class="exportForm.delivery === 'email' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'"
+                        class="px-3 py-1.5 text-sm rounded-md transition font-medium" x-text="t('export_email')"></button>
+                    </div>
+                  </div>
+
+                  <!-- 收件邮箱（仅邮件模式显示） -->
+                  <div x-show="exportForm.delivery === 'email'" x-transition>
                     <label class="block text-sm text-slate-600 mb-1.5" x-text="t('export_recipient')"></label>
                     <input type="email" x-model="exportForm.recipient_email" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="name@example.com">
                   </div>
@@ -1321,12 +1310,13 @@
                 <div class="flex justify-end gap-2 mt-6">
                   <button @click="showExportModal = false" class="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 transition" x-text="t('cancel')"></button>
                   <button @click="submitExport()" :disabled="exportLoading" class="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 transition disabled:opacity-50">
-                    <span x-show="!exportLoading" x-text="t('export_send')"></span>
+                    <span x-show="!exportLoading" x-text="exportForm.delivery === 'email' ? t('export_send') : t('export_download')"></span>
                     <span x-show="exportLoading" x-text="t('export_sending')"></span>
                   </button>
                 </div>
               </div>
             </div>
+          </template>
           </template>
         </div>
         

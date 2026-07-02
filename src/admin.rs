@@ -1148,7 +1148,10 @@ struct ExportUsageReportRequest {
     month: Option<String>,
     start_time: Option<String>,
     end_time: Option<String>,
-    recipient_email: String,
+    /// "download" | "email"，默认 "download"
+    delivery: Option<String>,
+    /// 仅 email 模式必填
+    recipient_email: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1174,16 +1177,19 @@ struct UsageReportDetailRow {
     total_money_cost: f64,
 }
 
-/// POST /api/usage/export_report
+/// POST /api/usage/export_report — 支持 download（直接下载 PDF/ZIP）和 email（发送邮件）两种模式
 async fn export_usage_report(
     State(state): State<Arc<AppState>>,
     _admin: AuthAdmin,
     Json(body): Json<ExportUsageReportRequest>,
-) -> Result<Json<ExportUsageReportResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<axum::response::Response, (StatusCode, Json<ErrorResponse>)> {
     if body.org_ids.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "请至少选择一个企业"));
     }
-    if body.recipient_email.trim().is_empty() {
+
+    let is_email = body.delivery.as_deref() == Some("email");
+    let recipient = body.recipient_email.as_deref().unwrap_or("").trim().to_string();
+    if is_email && recipient.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "收件邮箱不能为空"));
     }
 
@@ -1193,20 +1199,24 @@ async fn export_usage_report(
         body.end_time.as_deref(),
     )?;
 
-    let mail_settings = crate::db::get_mail_settings(&state.pool).await;
-    validate_mail_settings(&mail_settings)?;
+    if is_email {
+        let mail_settings = crate::db::get_mail_settings(&state.pool).await;
+        validate_mail_settings(&mail_settings)?;
+    }
 
+    // 查询所有选中组织及其项目，LEFT JOIN 用量数据（无用量的组织/项目也会出现，计数为 0）
     let details = sqlx::query_as::<_, UsageReportDetailRow>(
         "SELECT o.name AS org_name, \
                 p.name AS project_name, \
                 COALESCE(o.credit_price::FLOAT8, 0) AS credit_price, \
-                COUNT(*)::BIGINT AS request_count, \
+                COUNT(r.id)::BIGINT AS request_count, \
                 COALESCE(SUM(r.credit_cost)::FLOAT8, 0) AS total_credit_cost, \
                 COALESCE(SUM(r.money_cost)::FLOAT8, 0) AS total_money_cost \
-         FROM request_logs r \
-         JOIN organizations o ON o.id = r.org_id \
-         LEFT JOIN projects p ON p.id = r.project_id \
-         WHERE r.org_id = ANY($1) AND r.created_at >= $2 AND r.created_at < $3 \
+         FROM organizations o \
+         LEFT JOIN projects p ON p.org_id = o.id \
+         LEFT JOIN request_logs r ON r.org_id = o.id AND r.project_id = p.id \
+              AND r.created_at >= $2 AND r.created_at < $3 \
+         WHERE o.id = ANY($1) \
          GROUP BY o.name, p.name, o.credit_price \
          ORDER BY o.name, p.name",
     )
@@ -1260,28 +1270,26 @@ async fn export_usage_report(
         pdf_attachments.push(PdfAttachment { filename, data: pdf_data });
     }
 
-    if pdf_attachments.is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "所选时间段内无使用记录"));
+    if is_email {
+        // 邮件模式：批量发送所有组织的 PDF 附件
+        let mail_settings = crate::db::get_mail_settings(&state.pool).await;
+        send_usage_report_mail(&mail_settings, &recipient, start_time, end_time, &pdf_attachments).await?;
+        return Ok(Json(ExportUsageReportResponse {
+            ok: true, start_time, end_time,
+            org_count: body.org_ids.len(),
+            total_requests, total_credit_cost, total_money_cost,
+        }).into_response());
     }
 
-    send_usage_report_mail(
-        &mail_settings,
-        body.recipient_email.trim(),
-        start_time,
-        end_time,
-        &pdf_attachments,
-    )
-    .await?;
-
-    Ok(Json(ExportUsageReportResponse {
-        ok: true,
-        start_time,
-        end_time,
-        org_count: body.org_ids.len(),
-        total_requests,
-        total_credit_cost,
-        total_money_cost,
-    }))
+    // 下载模式：返回第一个组织的 PDF（前端逐个组织发起请求）
+    let att = pdf_attachments.into_iter().next()
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "未找到匹配的组织"))?;
+    let encoded_name = percent_encode_filename(&att.filename);
+    Ok((
+        [(header::CONTENT_TYPE, "application/pdf".to_string()),
+         (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{encoded_name}\"; filename*=UTF-8''{encoded_name}"))],
+        att.data,
+    ).into_response())
 }
 
 fn parse_report_time_range(
@@ -1349,6 +1357,18 @@ fn parse_report_time_range(
     }
 
     Ok((start, end))
+}
+
+/// RFC 5987 百分号编码：将非 ASCII 及特殊字符转为 %XX，确保 Content-Disposition 中文件名正确传输
+fn percent_encode_filename(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() * 3);
+    for b in name.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' => out.push(b as char),
+            _ => { out.push('%'); out.push_str(&format!("{b:02X}")); }
+        }
+    }
+    out
 }
 
 fn validate_mail_settings(
