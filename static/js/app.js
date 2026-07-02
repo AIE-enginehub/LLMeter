@@ -5,7 +5,7 @@ function app() {
   return {
     t: window.t,
     user: null,
-    tab: 'overview',
+    tab: ['overview','orgs','logs','usage','settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview',
     tabs: [
       { key: 'overview', label: 'overview' },
       { key: 'orgs', label: 'orgs' },
