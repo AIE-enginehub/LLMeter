@@ -106,12 +106,15 @@ pub(super) async fn list_logs(
 
     // 查询数据
     let data_sql = format!(
-        "SELECT id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, \
-                response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
-                (COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0) + COALESCE(cached_tokens, 0)) AS total_tokens, \
-                duration_ms, error_message, credit_cost, money_cost, is_long_context, compressed, est_tokens_saved, created_at \
-         FROM request_logs {where_clause} \
-         ORDER BY created_at DESC \
+        "SELECT r.id, r.org_id, COALESCE(o.name, 'unknown') AS org_name, \
+                r.project_id, p.name AS project_name, r.api_key_id, r.provider, r.model, r.path, r.method, r.is_stream, \
+                r.response_status, r.status, r.prompt_tokens, r.completion_tokens, r.cached_tokens, r.cache_write_tokens, \
+                (COALESCE(r.prompt_tokens, 0) + COALESCE(r.completion_tokens, 0) + COALESCE(r.cached_tokens, 0) + COALESCE(r.cache_write_tokens, 0)) AS total_tokens, \
+                r.duration_ms, r.error_message, r.credit_cost, r.money_cost, r.is_long_context, r.compressed, r.est_tokens_saved, r.created_at \
+         FROM (SELECT * FROM request_logs {where_clause}) r \
+         LEFT JOIN organizations o ON o.id = r.org_id \
+         LEFT JOIN projects p ON p.id = r.project_id \
+         ORDER BY r.created_at DESC \
          LIMIT ${param_idx} OFFSET ${}",
         param_idx + 1
     );
@@ -148,7 +151,7 @@ pub(super) async fn get_log(
     let row = sqlx::query_as::<_, LogRow>(
         "SELECT id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, \
                 request_body, response_body, response_status, status, \
-                prompt_tokens, completion_tokens, cached_tokens, total_tokens, \
+                prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens, total_tokens, \
                 duration_ms, error_message, credit_cost, money_cost, is_long_context, \
                 compressed, compression_mode, original_prompt_chars, forwarded_prompt_chars, est_tokens_saved, \
                 created_at, updated_at \

@@ -108,7 +108,9 @@ pub(super) struct CreateModelCreditRate {
     model_name: String,
     input_rate: f64,
     output_rate: f64,
-    cached_rate: f64,
+    cached_rate: Option<f64>,
+    #[serde(default)]
+    cache_write_rate: Option<f64>,
     #[serde(default)]
     long_context_threshold: Option<i64>,
     #[serde(default)]
@@ -117,6 +119,8 @@ pub(super) struct CreateModelCreditRate {
     long_context_output_rate: Option<f64>,
     #[serde(default)]
     long_context_cached_rate: Option<f64>,
+    #[serde(default)]
+    long_context_cache_write_rate: Option<f64>,
 }
 
 /// GET /api/settings/model_credit_rates — 列出所有模型积分扣除比例
@@ -136,9 +140,9 @@ pub(super) async fn create_model_credit_rate(
 ) -> Result<Json<crate::db::ModelCreditRate>, (StatusCode, Json<ErrorResponse>)> {
     let row = sqlx::query_as::<_, crate::db::ModelCreditRate>(
         &format!(
-            "INSERT INTO model_credit_rates (model_name, input_rate, output_rate, cached_rate, \
-                    long_context_threshold, long_context_input_rate, long_context_output_rate, long_context_cached_rate) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+            "INSERT INTO model_credit_rates (model_name, input_rate, output_rate, cached_rate, cache_write_rate, \
+                    long_context_threshold, long_context_input_rate, long_context_output_rate, long_context_cached_rate, long_context_cache_write_rate) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              RETURNING {}", crate::db::MODEL_RATE_COLS
         )
     )
@@ -146,10 +150,12 @@ pub(super) async fn create_model_credit_rate(
     .bind(body.input_rate)
     .bind(body.output_rate)
     .bind(body.cached_rate)
+    .bind(body.cache_write_rate)
     .bind(body.long_context_threshold)
     .bind(body.long_context_input_rate)
     .bind(body.long_context_output_rate)
     .bind(body.long_context_cached_rate)
+    .bind(body.long_context_cache_write_rate)
     .fetch_one(&state.pool)
     .await
     .map_err(friendly_db_err)?;
@@ -166,8 +172,8 @@ pub(super) async fn update_model_credit_rate(
     let row = sqlx::query_as::<_, crate::db::ModelCreditRate>(
         &format!(
             "UPDATE model_credit_rates SET \
-                model_name = $2, input_rate = $3, output_rate = $4, cached_rate = $5, \
-                long_context_threshold = $6, long_context_input_rate = $7, long_context_output_rate = $8, long_context_cached_rate = $9, \
+                model_name = $2, input_rate = $3, output_rate = $4, cached_rate = $5, cache_write_rate = $6, \
+                long_context_threshold = $7, long_context_input_rate = $8, long_context_output_rate = $9, long_context_cached_rate = $10, long_context_cache_write_rate = $11, \
                 updated_at = now() \
              WHERE id = $1 \
              RETURNING {}", crate::db::MODEL_RATE_COLS
@@ -178,10 +184,12 @@ pub(super) async fn update_model_credit_rate(
     .bind(body.input_rate)
     .bind(body.output_rate)
     .bind(body.cached_rate)
+    .bind(body.cache_write_rate)
     .bind(body.long_context_threshold)
     .bind(body.long_context_input_rate)
     .bind(body.long_context_output_rate)
     .bind(body.long_context_cached_rate)
+    .bind(body.long_context_cache_write_rate)
     .fetch_optional(&state.pool)
     .await
     .map_err(friendly_db_err)?

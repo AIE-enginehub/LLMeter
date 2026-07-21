@@ -223,7 +223,8 @@
                   <p class="text-[10px] text-slate-500 mt-1">
                     <span x-text="t('in')"></span><span x-text="fmtToken(stats.overview.prompt_tokens)"></span> · 
                     <span x-text="t('out')"></span><span x-text="fmtToken(stats.overview.completion_tokens)"></span> · 
-                    <span x-text="t('cache')"></span><span x-text="fmtToken(stats.overview.cached_tokens)"></span>
+                    <span x-text="t('cache')"></span><span x-text="fmtToken(stats.overview.cached_tokens)"></span> ·
+                    <span x-text="t('cache_write_token') + ': '"></span><span x-text="fmtToken(stats.overview.cache_write_tokens)"></span>
                   </p>
                 </div>
                 <div class="bg-gradient-to-br from-amber-50 to-white border border-amber-100/60 rounded-xl p-4 anim-fade-in-up anim-delay-4">
@@ -251,7 +252,7 @@
                             <td class="px-5 py-2.5 text-right text-slate-600" x-text="formatNum(og.request_count)"></td>
                             <td class="px-5 py-2.5 text-right text-slate-600">
                               <div x-text="fmtToken(og.total_tokens)"></div>
-                              <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(og.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(og.completion_tokens)"></span> · <span x-text="t('cache')"></span><span x-text="fmtToken(og.cached_tokens)"></span></div>
+                              <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(og.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(og.completion_tokens)"></span> · <span x-text="t('cache')"></span><span x-text="fmtToken(og.cached_tokens)"></span> · <span x-text="t('cache_write_token') + ': '"></span><span x-text="fmtToken(og.cache_write_tokens)"></span></div>
                             </td>
                             <td class="px-5 py-2.5 text-right text-indigo-600 font-medium" x-text="Number(og.total_credit_cost || 0).toFixed(4)"></td>
                             <td class="px-5 py-2.5 text-right"><span :class="og.error_count > 0 ? 'text-red-500' : 'text-slate-400'" x-text="og.error_count"></span></td>
@@ -275,7 +276,7 @@
                             <td class="px-5 py-2.5 text-right text-slate-600" x-text="formatNum(m.request_count)"></td>
                             <td class="px-5 py-2.5 text-right text-slate-600">
                             <div x-text="fmtToken(m.total_tokens)"></div>
-                            <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(m.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(m.completion_tokens)"></span> · <span x-text="t('cache')"></span><span x-text="fmtToken(m.cached_tokens)"></span></div>
+                            <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(m.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(m.completion_tokens)"></span> · <span x-text="t('cache')"></span><span x-text="fmtToken(m.cached_tokens)"></span> · <span x-text="t('cache_write_token') + ': '"></span><span x-text="fmtToken(m.cache_write_tokens)"></span></div>
                           </td>
                             <td class="px-5 py-2.5 text-right text-slate-500"><span x-text="Math.round(m.avg_duration_ms)"></span>ms</td>
                           </tr>
@@ -826,42 +827,31 @@
               <!-- 日志表格 -->
               <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm overflow-hidden">
                 <div class="overflow-x-auto">
-                  <table class="w-full text-sm">
-                    <thead><tr class="text-xs text-slate-400 border-b border-slate-100 bg-slate-50/50"><th class="text-left px-4 py-2.5 font-medium" x-text="t('time')"></th><th class="text-left px-4 py-2.5 font-medium" x-text="t('provider')"></th><th class="text-left px-4 py-2.5 font-medium" x-text="t('model')"></th><th class="text-center px-4 py-2.5 font-medium">SSE</th><th class="text-left px-4 py-2.5 font-medium" x-text="t('status')"></th><th class="text-right px-4 py-2.5 font-medium">Token</th><th class="text-right px-4 py-2.5 font-medium" x-text="t('consume_credit')"></th><th class="text-right px-4 py-2.5 font-medium" x-text="t('money_cost')"></th><th class="text-right px-4 py-2.5 font-medium" x-text="t('duration')"></th></tr></thead>
+                  <table class="w-full min-w-[1180px] text-sm">
+                    <thead><tr class="text-xs text-slate-400 border-b border-slate-100 bg-slate-50/50"><th class="text-left px-3 py-2.5 font-medium" x-text="t('org_name')"></th><th class="text-left px-3 py-2.5 font-medium" x-text="t('project_name')"></th><th class="text-left px-3 py-2.5 font-medium" x-text="t('time')"></th><th class="text-left px-3 py-2.5 font-medium" x-text="t('model')"></th><th class="text-right px-3 py-2.5 font-medium">Token</th><th class="text-right px-3 py-2.5 font-medium" x-text="t('consume_credit')"></th><th class="text-right px-3 py-2.5 font-medium" x-text="t('money_cost')"></th><th class="text-right px-3 py-2.5 font-medium" x-text="t('duration')"></th></tr></thead>
                     <tbody>
                       <template x-for="log in logs" :key="log.id">
-                        <tr @click="viewLog(log.id)" class="border-b border-slate-50 hover:bg-blue-50/50 cursor-pointer transition">
-                          <td class="px-4 py-2.5 text-xs text-slate-500 whitespace-nowrap" x-text="fmtTime(log.created_at)"></td>
-                          <td class="px-4 py-2.5 text-slate-600" x-text="log.provider"></td>
-                          <td class="px-4 py-2.5 font-mono text-xs text-slate-600" x-text="log.model || '-'"></td>
-                          <td class="px-4 py-2.5 text-center"><span x-show="log.is_stream" class="text-xs text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded">SSE</span><span x-show="!log.is_stream" class="text-xs text-slate-300">-</span></td>
-                          <td class="px-4 py-2.5">
-                            <span :class="{
-                              'text-emerald-600 bg-emerald-50': log.status === 'success',
-                              'text-red-500 bg-red-50': log.status === 'error',
-                              'text-amber-600 bg-amber-50': log.status === 'pending'
-                            }" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium">
-                              <span :class="{
-                                'bg-emerald-400': log.status === 'success',
-                                'bg-red-400': log.status === 'error',
-                                'bg-amber-400': log.status === 'pending'
-                              }" class="w-1.5 h-1.5 rounded-full"></span>
-                              <span x-text="log.status === 'success' ? t('success') : log.status === 'error' ? t('error') : t('pending')"></span>
-                            </span>
-                          </td>
-                        <td class="px-4 py-2.5 text-right text-xs text-slate-500">
+                        <tr @click="viewLog(log.id)"
+                          :class="{'border-l-4 border-l-emerald-400': log.status === 'success', 'border-l-4 border-l-red-500': log.status === 'error', 'border-l-4 border-l-amber-400': log.status === 'pending'}"
+                          :title="log.status === 'success' ? t('success') : log.status === 'error' ? t('error') : t('pending')"
+                          class="border-b border-slate-50 hover:bg-blue-50/50 cursor-pointer transition">
+                          <td class="px-3 py-2.5 text-xs font-medium text-slate-700 whitespace-nowrap" x-text="log.org_name || '-'"></td>
+                          <td class="px-3 py-2.5 text-xs text-slate-600 whitespace-nowrap" x-text="log.project_name || '-'"></td>
+                          <td class="px-3 py-2.5 text-xs text-slate-500 whitespace-nowrap" x-text="fmtTime(log.created_at)"></td>
+                          <td class="px-3 py-2.5 font-mono text-xs text-slate-600 whitespace-nowrap" x-text="log.provider + '/' + (log.model || '-')"></td>
+                        <td class="px-3 py-2.5 text-right text-xs text-slate-500">
                           <div class="font-medium text-slate-600" x-text="fmtToken(log.total_tokens)"></div>
-                          <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(log.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(log.completion_tokens)"></span> · <span x-text="t('cache')"></span><span x-text="fmtToken(log.cached_tokens)"></span></div>
+                          <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(log.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(log.completion_tokens)"></span> · <span x-text="t('cache')"></span><span x-text="fmtToken(log.cached_tokens)"></span> · <span x-text="t('cache_write_token') + ': '"></span><span x-text="fmtToken(log.cache_write_tokens)"></span></div>
                         </td>
-                        <td class="px-4 py-2.5 text-right text-xs font-medium">
+                        <td class="px-3 py-2.5 text-right text-xs font-medium">
                           <span class="text-indigo-600" x-text="log.credit_cost ? Number(log.credit_cost).toFixed(2) : '-'"></span>
                           <span x-show="log.is_long_context" class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-100 text-orange-700" x-text="t('long_ctx_tag')"></span>
                           <span x-show="log.compressed" :title="'~' + (log.est_tokens_saved||0) + ' tokens'" class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-100 text-teal-700" x-text="t('compressed_tag')"></span>
                         </td>
-                        <td class="px-4 py-2.5 text-right text-xs font-medium">
+                        <td class="px-3 py-2.5 text-right text-xs font-medium">
                           <span class="text-emerald-600" x-text="log.money_cost != null ? '¥' + Number(log.money_cost).toFixed(2) : '-'"></span>
                         </td>
-                          <td class="px-4 py-2.5 text-right text-xs text-slate-500" x-text="log.duration_ms != null ? log.duration_ms + 'ms' : '-'"></td>
+                          <td class="px-3 py-2.5 text-right text-xs text-slate-500" x-text="log.duration_ms != null ? log.duration_ms + 'ms' : '-'"></td>
                         </tr>
                       </template>
                     </tbody>
@@ -903,6 +893,7 @@
                       <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('prompt_token')"></p><p class="text-sm text-blue-600 font-medium" x-text="logDetail.prompt_tokens ?? '-'"></p></div>
                       <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('completion_token')"></p><p class="text-sm text-emerald-600 font-medium" x-text="logDetail.completion_tokens ?? '-'"></p></div>
                       <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('cached_token')"></p><p class="text-sm text-amber-600 font-medium" x-text="logDetail.cached_tokens ?? '-'"></p></div>
+                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('cache_write_token')"></p><p class="text-sm text-violet-600 font-medium" x-text="logDetail.cache_write_tokens ?? '-'"></p></div>
                       <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('total_token')"></p><p class="text-sm text-slate-700 font-medium" x-text="logDetail.total_tokens ?? '-'"></p></div>
                       <div class="bg-slate-50 rounded-lg px-3 py-2">
                         <p class="text-xs text-slate-400" x-text="t('est_tokens_saved')"></p>
@@ -1054,7 +1045,8 @@
                     <p class="text-[10px] text-slate-500 mt-1">
                       <span x-text="t('in')"></span><span x-text="fmtToken(stats.overview.prompt_tokens)"></span> · 
                       <span x-text="t('out')"></span><span x-text="fmtToken(stats.overview.completion_tokens)"></span> · 
-                      <span x-text="t('cache')"></span><span x-text="fmtToken(stats.overview.cached_tokens)"></span>
+                      <span x-text="t('cache')"></span><span x-text="fmtToken(stats.overview.cached_tokens)"></span> ·
+                      <span x-text="t('cache_write_token') + ': '"></span><span x-text="fmtToken(stats.overview.cache_write_tokens)"></span>
                     </p>
                   </div>
                 </template>
@@ -1106,7 +1098,8 @@
                             <div class="text-[10px] text-slate-300 mt-1">
                               <span x-text="t('in')"></span> <span x-text="fmtToken(d.prompt_tokens)"></span> · 
                               <span x-text="t('out')"></span> <span x-text="fmtToken(d.completion_tokens)"></span> · 
-                              <span x-text="t('cache')"></span> <span x-text="fmtToken(d.cached_tokens)"></span>
+                              <span x-text="t('cache')"></span> <span x-text="fmtToken(d.cached_tokens)"></span> ·
+                              <span x-text="t('cache_write_token') + ': '"></span> <span x-text="fmtToken(d.cache_write_tokens)"></span>
                             </div>
                           </div>
                         </div>
@@ -1173,7 +1166,7 @@
                           <!-- Token 视角列 -->
                           <td class="px-5 py-2.5 text-right text-slate-600" x-show="perspective === 'token'">
                             <div x-text="fmtToken(m.total_tokens)"></div>
-                            <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(m.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(m.completion_tokens)"></span> · <span x-text="t('cache')"></span><span x-text="fmtToken(m.cached_tokens)"></span></div>
+                            <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(m.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(m.completion_tokens)"></span> · <span x-text="t('cache')"></span><span x-text="fmtToken(m.cached_tokens)"></span> · <span x-text="t('cache_write_token') + ': '"></span><span x-text="fmtToken(m.cache_write_tokens)"></span></div>
                           </td>
                           <!-- Credit 视角列 -->
                           <td class="px-5 py-2.5 text-right text-indigo-600 font-medium" x-show="perspective === 'credit'" x-text="Number(m.total_credit_cost || 0).toFixed(4)"></td>
@@ -1381,11 +1374,12 @@
                       </div>
                     </div>
                     <div class="mt-2 text-xs">
-                      <div class="grid gap-y-1" style="grid-template-columns: 7rem repeat(3, 5rem) 2rem;">
+                      <div class="grid gap-y-1" style="grid-template-columns: 7rem repeat(4, 5.5rem) 2rem;">
                         <span class="text-slate-500" x-text="t('rate_normal')"></span>
                         <span><span x-text="t('rate_in')"></span> <span class="font-medium text-slate-700" x-text="r.input_rate"></span></span>
                         <span><span x-text="t('rate_out')"></span> <span class="font-medium text-slate-700" x-text="r.output_rate"></span></span>
-                        <span><span x-text="t('rate_cache')"></span> <span class="font-medium text-slate-700" x-text="r.cached_rate"></span></span>
+                        <span><span x-text="t('rate_cache')"></span> <span class="font-medium text-slate-700" x-text="r.cached_rate ?? '-'"></span></span>
+                        <span><span x-text="t('rate_cache_write')"></span> <span class="font-medium text-slate-700" x-text="r.cache_write_rate ?? '-'"></span></span>
                         <span class="text-slate-300">T/C</span>
                         <template x-if="r.long_context_threshold">
                           <span class="text-amber-600 font-medium" x-text="t('long_ctx_tag') + ' ≥' + r.long_context_threshold.toLocaleString()"></span>
@@ -1400,6 +1394,9 @@
                           <span><span x-text="t('rate_cache')"></span> <span class="font-medium text-amber-700" x-text="r.long_context_cached_rate || '-'"></span></span>
                         </template>
                         <template x-if="r.long_context_threshold">
+                          <span><span x-text="t('rate_cache_write')"></span> <span class="font-medium text-amber-700" x-text="r.long_context_cache_write_rate || '-'"></span></span>
+                        </template>
+                        <template x-if="r.long_context_threshold">
                           <span class="text-slate-300">T/C</span>
                         </template>
                       </div>
@@ -1412,7 +1409,7 @@
               <template x-teleport="body">
               <template x-if="editingRate">
                 <div class="fixed inset-0 bg-black/30 z-[9999] flex items-center justify-center" @click.self="editingRate = null">
-                  <div class="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 overflow-hidden">
+                  <div class="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 overflow-hidden">
                     <div class="px-6 py-4 border-b border-slate-100">
                       <h3 class="text-base font-semibold text-slate-800" x-text="editingRate.id ? t('edit_model_rate') : t('add_model_rate')"></h3>
                     </div>
@@ -1429,18 +1426,22 @@
                       <!-- 标准比例 -->
                       <div>
                         <label class="block text-xs font-medium text-slate-500 mb-2" x-text="t('credit_rate_setting')"></label>
-                        <div class="grid grid-cols-3 gap-3">
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
                           <div>
-                            <label class="block text-xs text-slate-400 mb-1" x-text="t('input_rate')"></label>
+                            <label class="flex items-end min-h-8 text-xs leading-4 text-slate-400 mb-1" x-text="t('input_rate')"></label>
                             <input x-model.number="editingRate.input_rate" type="number" step="0.01" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
                           </div>
                           <div>
-                            <label class="block text-xs text-slate-400 mb-1" x-text="t('output_rate')"></label>
+                            <label class="flex items-end min-h-8 text-xs leading-4 text-slate-400 mb-1" x-text="t('output_rate')"></label>
                             <input x-model.number="editingRate.output_rate" type="number" step="0.01" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
                           </div>
                           <div>
-                            <label class="block text-xs text-slate-400 mb-1" x-text="t('cached_rate')"></label>
-                            <input x-model.number="editingRate.cached_rate" type="number" step="0.01" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                            <label class="flex items-end min-h-8 text-xs leading-4 text-slate-400 mb-1" x-text="t('cached_rate')"></label>
+                            <input x-model.number="editingRate.cached_rate" type="number" step="0.01" :placeholder="t('optional_no_charge')" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                          </div>
+                          <div>
+                            <label class="flex items-end min-h-8 text-xs leading-4 text-slate-400 mb-1" x-text="t('cache_write_rate')"></label>
+                            <input x-model.number="editingRate.cache_write_rate" type="number" step="0.01" :placeholder="t('optional_no_charge')" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
                           </div>
                         </div>
                       </div>
@@ -1457,18 +1458,22 @@
                               <span class="text-xs text-slate-400 whitespace-nowrap">Tokens</span>
                             </div>
                           </div>
-                          <div class="grid grid-cols-3 gap-3">
+                          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
                             <div>
-                              <label class="block text-xs text-slate-400 mb-1" x-text="t('lc_input_rate')"></label>
+                              <label class="flex items-end min-h-8 text-xs leading-4 text-slate-400 mb-1" x-text="t('lc_input_rate')"></label>
                               <input x-model.number="editingRate.long_context_input_rate" type="number" step="0.01" min="0" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="0">
                             </div>
                             <div>
-                              <label class="block text-xs text-slate-400 mb-1" x-text="t('lc_output_rate')"></label>
+                              <label class="flex items-end min-h-8 text-xs leading-4 text-slate-400 mb-1" x-text="t('lc_output_rate')"></label>
                               <input x-model.number="editingRate.long_context_output_rate" type="number" step="0.01" min="0" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="0">
                             </div>
                             <div>
-                              <label class="block text-xs text-slate-400 mb-1" x-text="t('lc_cached_rate')"></label>
-                              <input x-model.number="editingRate.long_context_cached_rate" type="number" step="0.01" min="0" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" placeholder="0">
+                              <label class="flex items-end min-h-8 text-xs leading-4 text-slate-400 mb-1" x-text="t('lc_cached_rate')"></label>
+                              <input x-model.number="editingRate.long_context_cached_rate" type="number" step="0.01" min="0" :placeholder="t('optional_no_charge')" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                            </div>
+                            <div>
+                              <label class="flex items-end min-h-8 text-xs leading-4 text-slate-400 mb-1" x-text="t('lc_cache_write_rate')"></label>
+                              <input x-model.number="editingRate.long_context_cache_write_rate" type="number" step="0.01" min="0" :placeholder="t('optional_no_charge')" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
                             </div>
                           </div>
                         </div>

@@ -30,8 +30,8 @@ function settingsTab() {
     openAddRate() {
       this.editingRate = {
         id: null, model_name: '',
-        input_rate: 316, output_rate: 52, cached_rate: 3160,
-        long_context_threshold: 272000, long_context_input_rate: 158, long_context_output_rate: 35, long_context_cached_rate: 1580,
+        input_rate: 316, output_rate: 52, cached_rate: null, cache_write_rate: null,
+        long_context_threshold: 272000, long_context_input_rate: 158, long_context_output_rate: 35, long_context_cached_rate: null, long_context_cache_write_rate: null,
       };
     },
     openEditRate(r) {
@@ -46,11 +46,15 @@ function settingsTab() {
         const e = this.editingRate;
         const payload = {
           model_name: e.model_name.trim(),
-          input_rate: e.input_rate, output_rate: e.output_rate, cached_rate: e.cached_rate,
+          input_rate: e.input_rate,
+          output_rate: e.output_rate,
+          cached_rate: e.cached_rate === '' || e.cached_rate == null ? null : Number(e.cached_rate),
+          cache_write_rate: e.cache_write_rate === '' || e.cache_write_rate == null ? null : Number(e.cache_write_rate),
           long_context_threshold: e.long_context_threshold || null,
           long_context_input_rate: e.long_context_input_rate || null,
           long_context_output_rate: e.long_context_output_rate || null,
           long_context_cached_rate: e.long_context_cached_rate || null,
+          long_context_cache_write_rate: e.long_context_cache_write_rate || null,
         };
         if (e.id) {
           await api(`/api/settings/model_credit_rates/${e.id}`, { method: 'PUT', body: JSON.stringify(payload) });

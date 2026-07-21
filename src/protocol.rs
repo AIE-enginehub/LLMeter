@@ -15,6 +15,7 @@ pub struct TokenUsage {
     pub prompt_tokens: Option<i32>,
     pub completion_tokens: Option<i32>,
     pub cached_tokens: Option<i32>,
+    pub cache_write_tokens: Option<i32>,
     pub total_tokens: Option<i32>,
 }
 
@@ -152,8 +153,11 @@ pub fn extract_token_usage(protocol: Protocol, body: &Value) -> TokenUsage {
             let cached = usage["prompt_tokens_details"]["cached_tokens"].as_i64()
                 .or_else(|| usage["input_tokens_details"]["cached_tokens"].as_i64())
                 .map(|v| v as i32);
+            let cache_write = usage["prompt_tokens_details"]["cache_write_tokens"].as_i64()
+                .or_else(|| usage["input_tokens_details"]["cache_write_tokens"].as_i64())
+                .map(|v| v as i32);
             let total = usage["total_tokens"].as_i64().map(|v| v as i32);
-            TokenUsage { prompt_tokens: prompt, completion_tokens: completion, cached_tokens: cached, total_tokens: total }
+            TokenUsage { prompt_tokens: prompt, completion_tokens: completion, cached_tokens: cached, cache_write_tokens: cache_write, total_tokens: total }
         }
         Protocol::Anthropic => {
             let usage = &body["usage"];
@@ -163,6 +167,9 @@ pub fn extract_token_usage(protocol: Protocol, body: &Value) -> TokenUsage {
                 prompt_tokens: input,
                 completion_tokens: output,
                 cached_tokens: usage["cache_read_input_tokens"]
+                    .as_i64()
+                    .map(|v| v as i32),
+                cache_write_tokens: usage["cache_creation_input_tokens"]
                     .as_i64()
                     .map(|v| v as i32),
                 total_tokens: match (input, output) {
@@ -182,6 +189,7 @@ pub fn extract_token_usage(protocol: Protocol, body: &Value) -> TokenUsage {
                     prompt_tokens: prompt,
                     completion_tokens: candidates,
                     cached_tokens: cached,
+                    cache_write_tokens: None,
                     total_tokens: total.or_else(|| match (prompt, candidates) {
                         (Some(p), Some(c)) => Some(p + c),
                         _ => None,
@@ -255,6 +263,9 @@ fn extract_anthropic_streaming_event(event: &Value) -> TokenUsage {
                 cached_tokens: usage["cache_read_input_tokens"]
                     .as_i64()
                     .map(|v| v as i32),
+                cache_write_tokens: usage["cache_creation_input_tokens"]
+                    .as_i64()
+                    .map(|v| v as i32),
                 total_tokens: match (input, output) {
                     (Some(i), Some(o)) => Some(i + o),
                     _ => None,
@@ -270,6 +281,9 @@ fn extract_anthropic_streaming_event(event: &Value) -> TokenUsage {
                 prompt_tokens: input,
                 completion_tokens: output,
                 cached_tokens: usage["cache_read_input_tokens"]
+                    .as_i64()
+                    .map(|v| v as i32),
+                cache_write_tokens: usage["cache_creation_input_tokens"]
                     .as_i64()
                     .map(|v| v as i32),
                 total_tokens: match (input, output) {
@@ -319,13 +333,73 @@ pub fn merge_token_usage(base: Option<TokenUsage>, update: TokenUsage) -> TokenU
     let prompt = update.prompt_tokens.or(base.prompt_tokens);
     let completion = update.completion_tokens.or(base.completion_tokens);
     let cached = update.cached_tokens.or(base.cached_tokens);
+    let cache_write = update.cache_write_tokens.or(base.cache_write_tokens);
     TokenUsage {
         prompt_tokens: prompt,
         completion_tokens: completion,
         cached_tokens: cached,
+        cache_write_tokens: cache_write,
         total_tokens: match (prompt, completion) {
             (Some(p), Some(c)) => Some(p + c),
             _ => base.total_tokens,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn openai_chat_completions_extracts_cache_write_tokens() {
+        let body = json!({
+            "usage": {
+                "prompt_tokens": 7,
+                "completion_tokens": 12,
+                "total_tokens": 19,
+                "prompt_tokens_details": {
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 5
+                }
+            }
+        });
+
+        let usage = extract_token_usage(Protocol::OpenAI, &body);
+        assert_eq!(usage.prompt_tokens, Some(7));
+        assert_eq!(usage.completion_tokens, Some(12));
+        assert_eq!(usage.cached_tokens, Some(0));
+        assert_eq!(usage.cache_write_tokens, Some(5));
+        assert_eq!(usage.total_tokens, Some(19));
+    }
+
+    #[test]
+    fn openai_responses_extracts_cache_write_tokens() {
+        let body = json!({
+            "usage": {
+                "input_tokens": 20,
+                "output_tokens": 4,
+                "total_tokens": 24,
+                "input_tokens_details": {
+                    "cached_tokens": 8,
+                    "cache_write_tokens": 6
+                }
+            }
+        });
+
+        let usage = extract_token_usage(Protocol::OpenAI, &body);
+        assert_eq!(usage.cached_tokens, Some(8));
+        assert_eq!(usage.cache_write_tokens, Some(6));
+    }
+
+    #[test]
+    fn streaming_usage_preserves_cache_write_tokens() {
+        let chunk = concat!(
+            "data: {\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,",
+            "\"prompt_tokens_details\":{\"cache_write_tokens\":4}}}\n\n"
+        );
+
+        let usage = extract_streaming_usage(Protocol::OpenAI, chunk).unwrap();
+        assert_eq!(usage.cache_write_tokens, Some(4));
     }
 }

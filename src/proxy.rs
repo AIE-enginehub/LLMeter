@@ -380,18 +380,19 @@ async fn deduct_credits(
     // 按模型名称精确匹配，未匹配时自动回退到 default 行
     let rate = crate::db::find_model_credit_rate(pool, model_name.unwrap_or("default")).await;
 
-    let (base_ir, base_or, base_cr, lc_threshold, lc_input, lc_output, lc_cached) =
+    let (base_ir, base_or, base_cr, base_cwr, lc_threshold, lc_input, lc_output, lc_cached, lc_cache_write) =
         if let Some(ref mr) = rate {
             (
-                mr.input_rate, mr.output_rate, mr.cached_rate,
+                mr.input_rate, mr.output_rate, mr.cached_rate, mr.cache_write_rate,
                 mr.long_context_threshold.map(|v| v as u64),
                 mr.long_context_input_rate,
                 mr.long_context_output_rate,
                 mr.long_context_cached_rate,
+                mr.long_context_cache_write_rate,
             )
         } else {
             // model_credit_rates 表为空时的硬编码兜底
-            (1221.0, 203.5, 12210.0, None, None, None, None)
+            (1221.0, 203.5, Some(12210.0), Some(1221.0), None, None, None, None, None)
         };
 
     let is_long_context = lc_threshold
@@ -400,26 +401,18 @@ async fn deduct_credits(
         .unwrap_or(false)
         && lc_input.is_some();
 
-    let (ir, or, cr) = if is_long_context {
+    let (ir, or, cr, cwr) = if is_long_context {
         (
             lc_input.unwrap_or(base_ir),
             lc_output.unwrap_or(base_or),
-            lc_cached.unwrap_or(base_cr),
+            lc_cached.or(base_cr),
+            lc_cache_write.or(base_cwr),
         )
     } else {
-        (base_ir, base_or, base_cr)
+        (base_ir, base_or, base_cr, base_cwr)
     };
 
-    let mut cost = 0.0;
-    if let Some(p) = usage.prompt_tokens {
-        if ir > 0.0 { cost += (p as f64) / ir; }
-    }
-    if let Some(c) = usage.completion_tokens {
-        if or > 0.0 { cost += (c as f64) / or; }
-    }
-    if let Some(ca) = usage.cached_tokens {
-        if cr > 0.0 { cost += (ca as f64) / cr; }
-    }
+    let cost = calculate_token_credit_cost(usage, ir, or, cr, cwr);
 
     if cost > 0.0 {
         if let Some(decimal_cost) = rust_decimal::Decimal::from_f64(cost) {
@@ -440,6 +433,33 @@ async fn deduct_credits(
             .execute(pool)
             .await;
     }
+}
+
+fn calculate_token_credit_cost(
+    usage: &TokenUsage,
+    input_rate: f64,
+    output_rate: f64,
+    cached_rate: Option<f64>,
+    cache_write_rate: Option<f64>,
+) -> f64 {
+    let mut cost = 0.0;
+    if let Some(p) = usage.prompt_tokens {
+        if input_rate > 0.0 { cost += (p as f64) / input_rate; }
+    }
+    if let Some(c) = usage.completion_tokens {
+        if output_rate > 0.0 { cost += (c as f64) / output_rate; }
+    }
+    if let Some(ca) = usage.cached_tokens {
+        if let Some(rate) = cached_rate.filter(|rate| *rate > 0.0) {
+            cost += (ca as f64) / rate;
+        }
+    }
+    if let Some(cw) = usage.cache_write_tokens {
+        if let Some(rate) = cache_write_rate.filter(|rate| *rate > 0.0) {
+            cost += (cw as f64) / rate;
+        }
+    }
+    cost
 }
 
 /// 去掉请求路径中的协议前缀，避免与 base_url 中的路径重复
@@ -513,17 +533,17 @@ async fn handle_normal_response(
 
         let insert_res = sqlx::query(
             "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, \
-             request_body, response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
+             request_body, response_status, status, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens, \
              total_tokens, duration_ms, error_message, response_body, \
              compressed, compression_mode, original_prompt_chars, forwarded_prompt_chars, est_tokens_saved, updated_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24, now())"
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25, now())"
         )
         .bind(log_id).bind(meta.org_id).bind(meta.project_id).bind(meta.api_key_id)
         .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
         .bind(meta.is_stream).bind(meta.request_body.as_ref())
         .bind(status_code as i32).bind(status_str)
         .bind(usage.prompt_tokens).bind(usage.completion_tokens)
-        .bind(usage.cached_tokens).bind(usage.total_tokens)
+        .bind(usage.cached_tokens).bind(usage.cache_write_tokens).bind(usage.total_tokens)
         .bind(duration_ms).bind(error_msg.clone()).bind(resp_json.clone())
         .bind(meta.compressed).bind(meta.compression_mode.as_deref())
         .bind(meta.original_prompt_chars).bind(meta.forwarded_prompt_chars).bind(meta.est_tokens_saved)
@@ -659,17 +679,17 @@ async fn handle_streaming_response(
 
         let insert_res = sqlx::query(
             "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, \
-             request_body, response_status, status, prompt_tokens, completion_tokens, cached_tokens, \
+             request_body, response_status, status, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens, \
              total_tokens, duration_ms, error_message, response_body, \
              compressed, compression_mode, original_prompt_chars, forwarded_prompt_chars, est_tokens_saved, updated_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24, now())"
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25, now())"
         )
         .bind(log_id).bind(meta.org_id).bind(meta.project_id).bind(meta.api_key_id)
         .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
         .bind(meta.is_stream).bind(meta.request_body.as_ref())
         .bind(status_code as i32).bind(status_str)
         .bind(usage.prompt_tokens).bind(usage.completion_tokens)
-        .bind(usage.cached_tokens).bind(usage.total_tokens)
+        .bind(usage.cached_tokens).bind(usage.cache_write_tokens).bind(usage.total_tokens)
         .bind(duration_ms).bind(error_msg).bind(resp_json.clone())
         .bind(meta.compressed).bind(meta.compression_mode.as_deref())
         .bind(meta.original_prompt_chars).bind(meta.forwarded_prompt_chars).bind(meta.est_tokens_saved)
@@ -768,5 +788,33 @@ mod tests {
     fn precedence_falls_back_to_global() {
         assert!(compression_enabled_for(None, None, true));
         assert!(!compression_enabled_for(None, None, false));
+    }
+
+    #[test]
+    fn cache_write_tokens_are_included_in_credit_cost() {
+        let usage = TokenUsage {
+            prompt_tokens: Some(100),
+            completion_tokens: Some(20),
+            cached_tokens: Some(40),
+            cache_write_tokens: Some(30),
+            total_tokens: Some(120),
+        };
+
+        let cost = calculate_token_credit_cost(&usage, 100.0, 20.0, Some(40.0), Some(30.0));
+        assert!((cost - 4.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn missing_cache_rates_skip_cache_credit_cost() {
+        let usage = TokenUsage {
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: Some(40),
+            cache_write_tokens: Some(30),
+            total_tokens: Some(70),
+        };
+
+        let cost = calculate_token_credit_cost(&usage, 100.0, 20.0, None, None);
+        assert_eq!(cost, 0.0);
     }
 }

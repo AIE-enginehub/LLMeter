@@ -89,6 +89,8 @@ pub async fn run_migrations(pool: &PgPool) {
         ("008_credit_price",        include_str!("../migrations/008_credit_price.sql")),
         ("009_prompt_compression",  include_str!("../migrations/009_prompt_compression.sql")),
         ("010_model_credit_rates",  include_str!("../migrations/010_model_credit_rates.sql")),
+        ("011_cache_write_tokens",  include_str!("../migrations/011_cache_write_tokens.sql")),
+        ("012_optional_cache_rates", include_str!("../migrations/012_optional_cache_rates.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -200,6 +202,9 @@ pub struct CreditRates {
     pub input_rate: f64,
     pub output_rate: f64,
     pub cached_rate: f64,
+    /// 缓存写入 Token 比例；旧全局配置缺失时使用默认比例
+    #[serde(default = "default_cache_write_rate")]
+    pub cache_write_rate: f64,
     /// 长上下文阈值（输入 Token 数），为 None 或 0 时不启用
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub long_context_threshold: Option<u64>,
@@ -212,6 +217,13 @@ pub struct CreditRates {
     /// 长上下文缓存 Token 比例
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub long_context_cached_rate: Option<f64>,
+    /// 长上下文缓存写入 Token 比例
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_context_cache_write_rate: Option<f64>,
+}
+
+fn default_cache_write_rate() -> f64 {
+    1221.0
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
@@ -256,10 +268,12 @@ impl Default for CreditRates {
             input_rate: 1221.0,
             output_rate: 203.5,
             cached_rate: 12210.0,
+            cache_write_rate: default_cache_write_rate(),
             long_context_threshold: None,
             long_context_input_rate: None,
             long_context_output_rate: None,
             long_context_cached_rate: None,
+            long_context_cache_write_rate: None,
         }
     }
 }
@@ -415,7 +429,8 @@ pub struct ModelCreditRate {
     pub model_name: String,
     pub input_rate: f64,
     pub output_rate: f64,
-    pub cached_rate: f64,
+    pub cached_rate: Option<f64>,
+    pub cache_write_rate: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub long_context_threshold: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -424,12 +439,14 @@ pub struct ModelCreditRate {
     pub long_context_output_rate: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub long_context_cached_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_context_cache_write_rate: Option<f64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-pub const MODEL_RATE_COLS: &str = "id, model_name, input_rate, output_rate, cached_rate, \
-    long_context_threshold, long_context_input_rate, long_context_output_rate, long_context_cached_rate, \
+pub const MODEL_RATE_COLS: &str = "id, model_name, input_rate, output_rate, cached_rate, cache_write_rate, \
+    long_context_threshold, long_context_input_rate, long_context_output_rate, long_context_cached_rate, long_context_cache_write_rate, \
     created_at, updated_at";
 
 /// 按模型名称精确匹配积分扣除比例，未匹配时回退到 default 行

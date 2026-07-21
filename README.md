@@ -8,10 +8,10 @@ An AI API Proxy Gateway — Unify, proxy, and forward APIs from various AI provi
 
 - **Unified Proxy**: Compatible with standard AI API protocols like OpenAI, Gemini, and Anthropic. Clients only need to change the `base_url` for seamless integration.
 - **Multi-Organization**: Support creating independent organizations for different teams or clients. Each organization has its own API Keys and model configurations.
-- **Credit System**: Built-in credit billing system. Customize deduction rates for different token types (prompt, completion, cached). Automatically blocks requests when credits are exhausted.
+- **Credit System**: Built-in credit billing system. Customize deduction rates for different token types (prompt, completion, cache read, cache write). Automatically blocks requests when credits are exhausted.
 - **API Key Management**: Securely generate and distribute API Keys (with `gc-` prefix). Stores SHA-256 hashes; the full key is only visible upon creation.
 - **Model Routing**: Supports wildcard matching (e.g., `gpt-*`, `gemini-*`) and automatically routes requests to the corresponding provider based on priority.
-- **Usage Statistics**: Real-time tracking of token usage (prompt / completion / cached) per request. Aggregates data by organization, model, and date.
+- **Usage Statistics**: Real-time tracking of token usage (prompt / completion / cache read / cache write) per request. Aggregates data by organization, model, and date.
 - **Request Logs**: Fully records request and response payloads. Supports pagination and multi-condition filtering.
 - **Admin Dashboard**: Modern built-in Web UI (supports English and Chinese) for managing organizations, keys, models, logs, and system settings.
 - **Streaming Support**: Fully supports SSE (Server-Sent Events) streaming responses, forwarding chunks in real-time.
