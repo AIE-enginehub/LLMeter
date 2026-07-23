@@ -297,34 +297,114 @@ fn extract_anthropic_streaming_event(event: &Value) -> TokenUsage {
 }
 
 /// 从完整 SSE body 中提取 Responses API 的 usage（兜底方案）
-/// 当逐行解析未能提取到 usage 时，从 accumulated body 中定位最后一个 response.completed 事件
+/// 当逐行解析未能提取到 usage 时：
+/// 1. 优先从最后一个标准 response.completed 事件中提取；
+/// 2. 若上游把多个 JSON 片段异常拼接到同一 data 行，则反向查找最后一个有效 usage 对象。
 pub fn extract_responses_api_usage_from_body(body: &str) -> Option<TokenUsage> {
     let marker = "\"type\":\"response.completed\"";
-    let pos = body.rfind(marker)?;
+    if let Some(pos) = body.rfind(marker) {
+        // 向前查找该事件所在的 "data: " 行起点
+        let search_area = &body[..pos];
+        let data_prefix = "data: ";
+        if let Some(line_start) = search_area.rfind(data_prefix) {
+            let json_start = line_start + data_prefix.len();
 
-    // 向前查找该事件所在的 "data: " 行起点
-    let search_area = &body[..pos];
-    let data_prefix = "data: ";
-    let line_start = search_area.rfind(data_prefix)?;
-    let json_start = line_start + data_prefix.len();
+            // 向后查找 JSON 结尾：下一个 "\ndata: " 或 "\n\n" 边界
+            let remaining = &body[json_start..];
+            let json_end = remaining
+                .find("\ndata: ")
+                .or_else(|| remaining.find("\n\n"))
+                .map(|i| json_start + i)
+                .unwrap_or(body.len());
 
-    // 向后查找 JSON 结尾：下一个 "\ndata: " 或 "\n\n" 边界
-    let remaining = &body[json_start..];
-    let json_end = remaining.find("\ndata: ")
-        .or_else(|| remaining.find("\n\n"))
-        .map(|i| json_start + i)
-        .unwrap_or(body.len());
-
-    let json_str = body[json_start..json_end].trim();
-    let parsed: Value = serde_json::from_str(json_str).ok()?;
-    let response_obj = parsed.get("response")?;
-    let usage = extract_token_usage(Protocol::OpenAI, response_obj);
-
-    if usage.prompt_tokens.is_some() || usage.completion_tokens.is_some() {
-        Some(usage)
-    } else {
-        None
+            let json_str = body[json_start..json_end].trim();
+            if let Ok(parsed) = serde_json::from_str::<Value>(json_str) {
+                if let Some(response_obj) = parsed.get("response") {
+                    let usage = extract_token_usage(Protocol::OpenAI, response_obj);
+                    if usage.prompt_tokens.is_some() || usage.completion_tokens.is_some() {
+                        return Some(usage);
+                    }
+                }
+            }
+        }
     }
+
+    extract_last_openai_usage_object(body)
+}
+
+/// 从可能损坏或拼接的响应文本中反向提取最后一个有效 OpenAI usage 对象。
+///
+/// 某些兼容 Responses API 的上游会把事件尾部拼成
+/// `data: {...},{...,"usage":{...}}`，整行不是合法 JSON，但 usage 子对象本身仍然完整。
+fn extract_last_openai_usage_object(body: &str) -> Option<TokenUsage> {
+    const USAGE_MARKER: &str = "\"usage\":";
+
+    for (marker_start, _) in body.rmatch_indices(USAGE_MARKER) {
+        let value_area = &body[marker_start + USAGE_MARKER.len()..];
+        let leading_whitespace = value_area.len() - value_area.trim_start().len();
+        let object_start = marker_start + USAGE_MARKER.len() + leading_whitespace;
+
+        if body.as_bytes().get(object_start) != Some(&b'{') {
+            continue;
+        }
+
+        let Some(object_end) = find_json_object_end(body, object_start) else {
+            continue;
+        };
+        let Ok(usage_value) =
+            serde_json::from_str::<Value>(&body[object_start..object_end])
+        else {
+            continue;
+        };
+
+        let wrapped = serde_json::json!({ "usage": usage_value });
+        let usage = extract_token_usage(Protocol::OpenAI, &wrapped);
+        if usage.prompt_tokens.is_some() || usage.completion_tokens.is_some() {
+            return Some(usage);
+        }
+    }
+
+    None
+}
+
+/// 返回从 `object_start` 开始的 JSON 对象结束位置（不包含结束位置）。
+/// 扫描时忽略字符串中的花括号，并正确处理转义引号。
+fn find_json_object_end(text: &str, object_start: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    if bytes.get(object_start) != Some(&b'{') {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (offset, byte) in bytes[object_start..].iter().copied().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match byte {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(object_start + offset + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
 }
 
 /// 合并两个 TokenUsage，新值覆盖旧值（None 保留旧值）
@@ -401,5 +481,24 @@ mod tests {
 
         let usage = extract_streaming_usage(Protocol::OpenAI, chunk).unwrap();
         assert_eq!(usage.cache_write_tokens, Some(4));
+    }
+
+    #[test]
+    fn responses_usage_is_recovered_from_malformed_concatenated_sse_line() {
+        let body = concat!(
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"},",
+            "{\"output\":[],\"usage\":{\"input_tokens\":34972,",
+            "\"input_tokens_details\":{\"cache_write_tokens\":121,\"cached_tokens\":34848},",
+            "\"output_tokens\":259,\"output_tokens_details\":{\"reasoning_tokens\":147},",
+            "\"total_tokens\":35231},\"sequence_number\":115}\n\n"
+        );
+
+        let usage = extract_responses_api_usage_from_body(body).unwrap();
+        assert_eq!(usage.prompt_tokens, Some(34972));
+        assert_eq!(usage.completion_tokens, Some(259));
+        assert_eq!(usage.cached_tokens, Some(34848));
+        assert_eq!(usage.cache_write_tokens, Some(121));
+        assert_eq!(usage.total_tokens, Some(35231));
     }
 }
