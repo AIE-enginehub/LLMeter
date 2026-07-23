@@ -332,6 +332,43 @@ pub fn extract_responses_api_usage_from_body(body: &str) -> Option<TokenUsage> {
     extract_last_openai_usage_object(body)
 }
 
+/// 从 Responses API 的 SSE 内容中提取 `resp_*` 响应 ID。
+/// 优先解析合法 data 事件；上游事件损坏时再使用受限字符串扫描兜底。
+pub fn extract_openai_response_id(body: &str) -> Option<String> {
+    for line in body.lines() {
+        let Some(json_str) = line.trim().strip_prefix("data: ") else {
+            continue;
+        };
+        let Ok(event) = serde_json::from_str::<Value>(json_str) else {
+            continue;
+        };
+
+        let response_id = event
+            .get("response")
+            .and_then(|response| response.get("id"))
+            .or_else(|| event.get("id"))
+            .and_then(Value::as_str);
+        if let Some(response_id) = response_id.filter(|id| id.starts_with("resp_")) {
+            return Some(response_id.to_string());
+        }
+    }
+
+    for marker in ["\"id\":\"resp_", "\"id\": \"resp_"] {
+        let Some(marker_start) = body.find(marker) else {
+            continue;
+        };
+        let id_start = marker_start + marker.find("resp_")?;
+        let remaining = &body[id_start..];
+        let id_end = remaining.find('"')?;
+        let response_id = &remaining[..id_end];
+        if response_id.starts_with("resp_") {
+            return Some(response_id.to_string());
+        }
+    }
+
+    None
+}
+
 /// 从可能损坏或拼接的响应文本中反向提取最后一个有效 OpenAI usage 对象。
 ///
 /// 某些兼容 Responses API 的上游会把事件尾部拼成
@@ -500,5 +537,19 @@ mod tests {
         assert_eq!(usage.cached_tokens, Some(34848));
         assert_eq!(usage.cache_write_tokens, Some(121));
         assert_eq!(usage.total_tokens, Some(35231));
+    }
+
+    #[test]
+    fn responses_id_is_extracted_from_created_event() {
+        let body = concat!(
+            "event: response.created\n",
+            "data: {\"type\":\"response.created\",\"response\":",
+            "{\"id\":\"resp_test_123\",\"status\":\"in_progress\"}}\n\n"
+        );
+
+        assert_eq!(
+            extract_openai_response_id(body).as_deref(),
+            Some("resp_test_123")
+        );
     }
 }

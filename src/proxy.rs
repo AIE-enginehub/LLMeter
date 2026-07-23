@@ -10,7 +10,7 @@ use rust_decimal::prelude::FromPrimitive;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::protocol::{self, Protocol, TokenUsage};
@@ -36,6 +36,13 @@ struct LogMeta {
     original_prompt_chars: Option<i32>,
     forwarded_prompt_chars: Option<i32>,
     est_tokens_saved: Option<i32>,
+}
+
+#[derive(Clone)]
+struct ResponsesUsageRecovery {
+    client: reqwest::Client,
+    responses_url: String,
+    headers: http::HeaderMap,
 }
 
 /// 解析 X-LLMeter-Compress 头：off/0/false → Some(false)，on/1/true → Some(true)，其余 None
@@ -275,6 +282,30 @@ pub async fn proxy_handler(
 
         tracing::info!("Proxy: {} {} -> {} (config: {}, attempt: {})", method, path, target_url, model_config.name, attempt + 1);
 
+        let usage_recovery = if is_stream
+            && actual_protocol == Protocol::OpenAI
+            && path.starts_with("/v1/responses")
+        {
+            let mut recovery_headers = forwarded_headers.clone();
+            recovery_headers.remove(http::header::CONTENT_TYPE);
+            recovery_headers.insert(
+                http::header::ACCEPT,
+                http::HeaderValue::from_static("application/json"),
+            );
+            Some(ResponsesUsageRecovery {
+                client: state.http_client.clone(),
+                responses_url: target_url
+                    .split('?')
+                    .next()
+                    .unwrap_or(&target_url)
+                    .trim_end_matches('/')
+                    .to_string(),
+                headers: recovery_headers,
+            })
+        } else {
+            None
+        };
+
         // 发送请求
         let upstream_result = state
             .http_client
@@ -357,7 +388,18 @@ pub async fn proxy_handler(
         };
 
         if is_stream {
-            return handle_streaming_response(state.pool.clone(), log_meta, actual_protocol, upstream_resp, resp_status, start, is_passthrough, comp_header_val.clone()).await;
+            return handle_streaming_response(
+                state.pool.clone(),
+                log_meta,
+                actual_protocol,
+                upstream_resp,
+                resp_status,
+                start,
+                is_passthrough,
+                comp_header_val.clone(),
+                usage_recovery,
+            )
+            .await;
         } else {
             return handle_normal_response(state.pool.clone(), log_meta, actual_protocol, upstream_resp, resp_status, start, is_passthrough, comp_header_val.clone()).await;
         }
@@ -589,6 +631,7 @@ async fn handle_streaming_response(
     start: Instant,
     is_passthrough: bool,
     comp_header: Option<String>,
+    usage_recovery: Option<ResponsesUsageRecovery>,
 ) -> Result<Response, (StatusCode, String)> {
     let resp_headers = upstream_resp.headers().clone();
     let byte_stream = upstream_resp.bytes_stream();
@@ -598,22 +641,30 @@ async fn handle_streaming_response(
     let log_id = meta.id;
     let (usage_tx, usage_rx) = tokio::sync::oneshot::channel::<(TokenUsage, i32, String)>();
 
-    // line_buf 用于缓冲跨 chunk 的不完整 SSE 行，确保 usage 提取不会因行被截断而丢失
+    // 必须按原始字节累计。网络 chunk 可能切在多字节 UTF-8 字符中间，
+    // 若对每个 chunk 单独 from_utf8，会错误丢弃整个 chunk（包括其中的 usage）。
     let body_stream = stream::unfold(
-        (byte_stream, Some(usage_tx), TokenUsage::default(), String::new(), String::new()),
+        (
+            byte_stream,
+            Some(usage_tx),
+            TokenUsage::default(),
+            Vec::<u8>::new(),
+            Vec::<u8>::new(),
+        ),
         move |(mut stream, tx, mut last_usage, mut accumulated_body, mut line_buf)| async move {
             match stream.next().await {
                 Some(Ok(chunk)) => {
-                    if let Ok(text) = std::str::from_utf8(&chunk) {
-                        accumulated_body.push_str(text);
-                        line_buf.push_str(text);
-                        // 只处理以 \n 结尾的完整行，不完整的末尾保留到下个 chunk
-                        if let Some(last_newline) = line_buf.rfind('\n') {
-                            let complete = line_buf[..=last_newline].to_string();
-                            line_buf = line_buf[last_newline + 1..].to_string();
-                            if let Some(usage) = protocol::extract_streaming_usage(proto, &complete) {
-                                last_usage = protocol::merge_token_usage(Some(last_usage), usage);
-                            }
+                    accumulated_body.extend_from_slice(&chunk);
+                    line_buf.extend_from_slice(&chunk);
+
+                    // 只解码完整 SSE 行；末尾残缺字节保留到下一个 chunk。
+                    if let Some(complete) = take_complete_sse_lines(&mut line_buf) {
+                        let complete_text = String::from_utf8_lossy(&complete);
+                        if let Some(usage) =
+                            protocol::extract_streaming_usage(proto, complete_text.as_ref())
+                        {
+                            last_usage =
+                                protocol::merge_token_usage(Some(last_usage), usage);
                         }
                     }
                     Some((Ok::<Bytes, std::io::Error>(chunk), (stream, tx, last_usage, accumulated_body, line_buf)))
@@ -625,10 +676,15 @@ async fn handle_streaming_response(
                 None => {
                     // 处理缓冲区中剩余的不完整行
                     if !line_buf.is_empty() {
-                        if let Some(usage) = protocol::extract_streaming_usage(proto, &line_buf) {
+                        let remaining_text = String::from_utf8_lossy(&line_buf);
+                        if let Some(usage) =
+                            protocol::extract_streaming_usage(proto, remaining_text.as_ref())
+                        {
                             last_usage = protocol::merge_token_usage(Some(last_usage), usage);
                         }
                     }
+                    let accumulated_body =
+                        String::from_utf8_lossy(&accumulated_body).into_owned();
                     // 兜底：逐行解析未提取到 usage 时，从完整 body 中查找 response.completed 事件
                     if last_usage.prompt_tokens.is_none() && last_usage.completion_tokens.is_none() {
                         if let Some(usage) = protocol::extract_responses_api_usage_from_body(&accumulated_body) {
@@ -648,7 +704,7 @@ async fn handle_streaming_response(
     tokio::spawn(async move {
         let org_id = meta.org_id;
 
-        let (usage, duration_ms, body_str) = match usage_rx.await {
+        let (mut usage, duration_ms, body_str) = match usage_rx.await {
             Ok(v) => v,
             Err(_) => {
                 tracing::warn!("Stream channel closed without sending usage for log {log_id}, marking as error");
@@ -668,8 +724,33 @@ async fn handle_streaming_response(
             }
         };
 
-        let status_str = if (200..300).contains(&status_code) { "success" } else { "error" };
-        let error_msg = if status_str == "error" {
+        if !is_passthrough
+            && usage.prompt_tokens.is_none()
+            && usage.completion_tokens.is_none()
+        {
+            if let Some(recovery) = usage_recovery.as_ref() {
+                if let Some(recovered) =
+                    recover_responses_usage(recovery, &body_str, log_id).await
+                {
+                    usage = protocol::merge_token_usage(Some(usage), recovered);
+                }
+            }
+        }
+
+        let usage_missing = !is_passthrough
+            && usage.prompt_tokens.is_none()
+            && usage.completion_tokens.is_none();
+        let status_str = if (200..300).contains(&status_code) && !usage_missing {
+            "success"
+        } else {
+            "error"
+        };
+        let error_msg = if usage_missing {
+            Some(
+                "Upstream stream ended without final usage; token usage could not be recovered"
+                    .to_string(),
+            )
+        } else if status_str == "error" {
             Some(body_str.chars().take(500).collect::<String>())
         } else {
             None
@@ -723,6 +804,81 @@ async fn handle_streaming_response(
     builder
         .body(Body::from_stream(body_stream))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to build streaming response: {e}")))
+}
+
+fn take_complete_sse_lines(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
+    let last_newline = buffer.iter().rposition(|byte| *byte == b'\n')?;
+    let remainder = buffer.split_off(last_newline + 1);
+    Some(std::mem::replace(buffer, remainder))
+}
+
+async fn recover_responses_usage(
+    recovery: &ResponsesUsageRecovery,
+    body: &str,
+    log_id: Uuid,
+) -> Option<TokenUsage> {
+    let response_id = protocol::extract_openai_response_id(body)?;
+    let url = format!("{}/{}", recovery.responses_url, response_id);
+    // 部分兼容服务会在流关闭后延迟持久化响应，后台最多等待约 14 秒。
+    let retry_delays = [0_u64, 1_000, 3_000, 10_000];
+
+    for (attempt, delay_ms) in retry_delays.into_iter().enumerate() {
+        if delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        }
+
+        let response = match recovery
+            .client
+            .get(&url)
+            .headers(recovery.headers.clone())
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(
+                    "Responses usage recovery request failed for log {} (attempt {}): {}",
+                    log_id,
+                    attempt + 1,
+                    error
+                );
+                continue;
+            }
+        };
+
+        if !response.status().is_success() {
+            tracing::warn!(
+                "Responses usage recovery returned {} for log {} (attempt {})",
+                response.status(),
+                log_id,
+                attempt + 1
+            );
+            continue;
+        }
+
+        let Ok(response_json) = response.json::<Value>().await else {
+            tracing::warn!(
+                "Responses usage recovery returned invalid JSON for log {} (attempt {})",
+                log_id,
+                attempt + 1
+            );
+            continue;
+        };
+        let usage = protocol::extract_token_usage(Protocol::OpenAI, &response_json);
+        if usage.prompt_tokens.is_some() || usage.completion_tokens.is_some() {
+            tracing::info!(
+                "Recovered Responses API usage by response id for log {}",
+                log_id
+            );
+            return Some(usage);
+        }
+    }
+
+    tracing::warn!(
+        "Responses API usage remained unavailable after recovery for log {}",
+        log_id
+    );
+    None
 }
 
 #[cfg(test)]
@@ -788,6 +944,33 @@ mod tests {
     fn precedence_falls_back_to_global() {
         assert!(compression_enabled_for(None, None, true));
         assert!(!compression_enabled_for(None, None, false));
+    }
+
+    #[test]
+    fn sse_lines_survive_chunks_split_inside_utf8_character() {
+        let event = concat!(
+            "data: {\"type\":\"response.completed\",\"text\":\"金额\",",
+            "\"response\":{\"usage\":{\"input_tokens\":12,\"output_tokens\":3}}}\n\n"
+        );
+        let split_at = event.find('金').unwrap() + 1;
+        let bytes = event.as_bytes();
+        let mut line_buffer = Vec::new();
+        let mut accumulated = Vec::new();
+
+        accumulated.extend_from_slice(&bytes[..split_at]);
+        line_buffer.extend_from_slice(&bytes[..split_at]);
+        assert!(take_complete_sse_lines(&mut line_buffer).is_none());
+
+        accumulated.extend_from_slice(&bytes[split_at..]);
+        line_buffer.extend_from_slice(&bytes[split_at..]);
+        let complete = take_complete_sse_lines(&mut line_buffer).unwrap();
+
+        assert_eq!(String::from_utf8(accumulated).unwrap(), event);
+        let usage =
+            protocol::extract_streaming_usage(Protocol::OpenAI, &String::from_utf8(complete).unwrap())
+                .unwrap();
+        assert_eq!(usage.prompt_tokens, Some(12));
+        assert_eq!(usage.completion_tokens, Some(3));
     }
 
     #[test]
