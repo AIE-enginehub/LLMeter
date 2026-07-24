@@ -109,7 +109,7 @@ pub(super) async fn list_logs(
         "SELECT r.id, r.org_id, COALESCE(o.name, 'unknown') AS org_name, \
                 r.project_id, p.name AS project_name, r.api_key_id, r.provider, r.model, r.path, r.method, r.is_stream, \
                 r.response_status, r.status, r.prompt_tokens, r.completion_tokens, r.cached_tokens, r.cache_write_tokens, \
-                (COALESCE(r.prompt_tokens, 0) + COALESCE(r.completion_tokens, 0) + COALESCE(r.cached_tokens, 0) + COALESCE(r.cache_write_tokens, 0)) AS total_tokens, \
+                COALESCE(r.total_tokens, COALESCE(r.prompt_tokens, 0) + COALESCE(r.completion_tokens, 0)) AS total_tokens, \
                 r.duration_ms, r.error_message, r.credit_cost, r.money_cost, r.is_long_context, r.compressed, r.est_tokens_saved, r.created_at \
          FROM (SELECT * FROM request_logs {where_clause}) r \
          LEFT JOIN organizations o ON o.id = r.org_id \

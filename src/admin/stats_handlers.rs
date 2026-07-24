@@ -169,7 +169,7 @@ pub(super) async fn get_stats(
             COALESCE(SUM(completion_tokens), 0)::BIGINT AS completion_tokens, \
             COALESCE(SUM(cached_tokens), 0)::BIGINT AS cached_tokens, \
             COALESCE(SUM(cache_write_tokens), 0)::BIGINT AS cache_write_tokens, \
-            (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) + COALESCE(SUM(cached_tokens), 0) + COALESCE(SUM(cache_write_tokens), 0))::BIGINT AS total_tokens, \
+            COALESCE(SUM(COALESCE(total_tokens, COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0))), 0)::BIGINT AS total_tokens, \
             COALESCE(AVG(duration_ms)::FLOAT8, 0) AS avg_duration_ms, \
             COALESCE(SUM(credit_cost)::FLOAT8, 0) AS total_credit_cost, \
             COUNT(*) FILTER (WHERE compressed)::BIGINT AS compressed_requests, \
@@ -192,7 +192,7 @@ pub(super) async fn get_stats(
             COALESCE(SUM(r.completion_tokens), 0)::BIGINT AS completion_tokens, \
             COALESCE(SUM(r.cached_tokens), 0)::BIGINT AS cached_tokens, \
             COALESCE(SUM(r.cache_write_tokens), 0)::BIGINT AS cache_write_tokens, \
-            (COALESCE(SUM(r.prompt_tokens), 0) + COALESCE(SUM(r.completion_tokens), 0) + COALESCE(SUM(r.cached_tokens), 0) + COALESCE(SUM(r.cache_write_tokens), 0))::BIGINT AS total_tokens, \
+            COALESCE(SUM(COALESCE(r.total_tokens, COALESCE(r.prompt_tokens, 0) + COALESCE(r.completion_tokens, 0))), 0)::BIGINT AS total_tokens, \
             COALESCE(SUM(r.credit_cost)::FLOAT8, 0) AS total_credit_cost, \
             COUNT(*) FILTER (WHERE r.status = 'error')::BIGINT AS error_count \
          FROM request_logs r LEFT JOIN organizations o ON r.org_id = o.id \
@@ -216,7 +216,7 @@ pub(super) async fn get_stats(
             COALESCE(SUM(r.completion_tokens), 0)::BIGINT AS completion_tokens, \
             COALESCE(SUM(r.cached_tokens), 0)::BIGINT AS cached_tokens, \
             COALESCE(SUM(r.cache_write_tokens), 0)::BIGINT AS cache_write_tokens, \
-            (COALESCE(SUM(r.prompt_tokens), 0) + COALESCE(SUM(r.completion_tokens), 0) + COALESCE(SUM(r.cached_tokens), 0) + COALESCE(SUM(r.cache_write_tokens), 0))::BIGINT AS total_tokens, \
+            COALESCE(SUM(COALESCE(r.total_tokens, COALESCE(r.prompt_tokens, 0) + COALESCE(r.completion_tokens, 0))), 0)::BIGINT AS total_tokens, \
             COALESCE(SUM(r.credit_cost)::FLOAT8, 0) AS total_credit_cost, \
             COUNT(*) FILTER (WHERE r.status = 'error')::BIGINT AS error_count \
          FROM request_logs r \
@@ -237,7 +237,7 @@ pub(super) async fn get_stats(
             COALESCE(SUM(completion_tokens), 0)::BIGINT AS completion_tokens, \
             COALESCE(SUM(cached_tokens), 0)::BIGINT AS cached_tokens, \
             COALESCE(SUM(cache_write_tokens), 0)::BIGINT AS cache_write_tokens, \
-            (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) + COALESCE(SUM(cached_tokens), 0) + COALESCE(SUM(cache_write_tokens), 0))::BIGINT AS total_tokens, \
+            COALESCE(SUM(COALESCE(total_tokens, COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0))), 0)::BIGINT AS total_tokens, \
             COALESCE(AVG(duration_ms)::FLOAT8, 0) AS avg_duration_ms, \
             COALESCE(SUM(credit_cost)::FLOAT8, 0) AS total_credit_cost \
          FROM request_logs WHERE created_at >= $1 {extra_where} \
@@ -255,7 +255,7 @@ pub(super) async fn get_stats(
             COALESCE(SUM(completion_tokens), 0)::BIGINT AS completion_tokens, \
             COALESCE(SUM(cached_tokens), 0)::BIGINT AS cached_tokens, \
             COALESCE(SUM(cache_write_tokens), 0)::BIGINT AS cache_write_tokens, \
-            (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) + COALESCE(SUM(cached_tokens), 0) + COALESCE(SUM(cache_write_tokens), 0))::BIGINT AS total_tokens, \
+            COALESCE(SUM(COALESCE(total_tokens, COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0))), 0)::BIGINT AS total_tokens, \
             COUNT(*) FILTER (WHERE status = 'error')::BIGINT AS error_count, \
             COALESCE(SUM(credit_cost)::FLOAT8, 0) AS credit_cost \
          FROM request_logs WHERE created_at >= $1 {extra_where} \

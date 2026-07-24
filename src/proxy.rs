@@ -417,6 +417,7 @@ async fn deduct_credits(
     log_id: Uuid,
     model_name: Option<&str>,
     credit_price: rust_decimal::Decimal,
+    protocol: Protocol,
     usage: &TokenUsage,
 ) {
     // 按模型名称精确匹配，未匹配时自动回退到 default 行
@@ -439,7 +440,11 @@ async fn deduct_credits(
 
     let is_long_context = lc_threshold
         .filter(|&t| t > 0)
-        .and_then(|threshold| usage.prompt_tokens.map(|p| (p as u64) >= threshold))
+        .and_then(|threshold| {
+            usage
+                .prompt_tokens
+                .map(|p| (p.max(0) as u64) >= threshold)
+        })
         .unwrap_or(false)
         && lc_input.is_some();
 
@@ -454,7 +459,7 @@ async fn deduct_credits(
         (base_ir, base_or, base_cr, base_cwr)
     };
 
-    let cost = calculate_token_credit_cost(usage, ir, or, cr, cwr);
+    let cost = calculate_token_credit_cost(protocol, usage, ir, or, cr, cwr);
 
     if cost > 0.0 {
         if let Some(decimal_cost) = rust_decimal::Decimal::from_f64(cost) {
@@ -478,28 +483,43 @@ async fn deduct_credits(
 }
 
 fn calculate_token_credit_cost(
+    protocol: Protocol,
     usage: &TokenUsage,
     input_rate: f64,
     output_rate: f64,
     cached_rate: Option<f64>,
     cache_write_rate: Option<f64>,
 ) -> f64 {
+    let prompt_tokens = usage.prompt_tokens.unwrap_or(0).max(0) as u64;
+    let mut cached_tokens = usage.cached_tokens.unwrap_or(0).max(0) as u64;
+    let mut cache_write_tokens = usage.cache_write_tokens.unwrap_or(0).max(0) as u64;
+
+    // OpenAI 的 cached_tokens/cache_write_tokens 是 prompt_tokens 的明细子集。
+    // 将明细限制在总输入范围内，既避免重复计费，也防止异常上游数据导致超额扣费。
+    let uncached_input_tokens = if protocol == Protocol::OpenAI {
+        cached_tokens = cached_tokens.min(prompt_tokens);
+        cache_write_tokens =
+            cache_write_tokens.min(prompt_tokens.saturating_sub(cached_tokens));
+        prompt_tokens
+            .saturating_sub(cached_tokens)
+            .saturating_sub(cache_write_tokens)
+    } else {
+        // Anthropic 等协议的 input/cache_read/cache_creation 是独立计数。
+        prompt_tokens
+    };
+
     let mut cost = 0.0;
-    if let Some(p) = usage.prompt_tokens {
-        if input_rate > 0.0 { cost += (p as f64) / input_rate; }
+    if input_rate > 0.0 {
+        cost += (uncached_input_tokens as f64) / input_rate;
     }
-    if let Some(c) = usage.completion_tokens {
-        if output_rate > 0.0 { cost += (c as f64) / output_rate; }
+    if output_rate > 0.0 {
+        cost += (usage.completion_tokens.unwrap_or(0).max(0) as f64) / output_rate;
     }
-    if let Some(ca) = usage.cached_tokens {
-        if let Some(rate) = cached_rate.filter(|rate| *rate > 0.0) {
-            cost += (ca as f64) / rate;
-        }
+    if let Some(rate) = cached_rate.filter(|rate| *rate > 0.0) {
+        cost += (cached_tokens as f64) / rate;
     }
-    if let Some(cw) = usage.cache_write_tokens {
-        if let Some(rate) = cache_write_rate.filter(|rate| *rate > 0.0) {
-            cost += (cw as f64) / rate;
-        }
+    if let Some(rate) = cache_write_rate.filter(|rate| *rate > 0.0) {
+        cost += (cache_write_tokens as f64) / rate;
     }
     cost
 }
@@ -553,11 +573,12 @@ async fn handle_normal_response(
         }
     };
     
-    let usage = if is_passthrough {
+    let mut usage = if is_passthrough {
         TokenUsage::default()
     } else {
         resp_json.as_ref().map(|j| protocol::extract_token_usage(protocol, j)).unwrap_or_default()
     };
+    usage.total_tokens = protocol::normalized_total_tokens(protocol, &usage);
 
     let duration_ms = start.elapsed().as_millis() as i32;
     let status_code = status.as_u16();
@@ -599,7 +620,16 @@ async fn handle_normal_response(
         if is_passthrough { return; }
 
         if status_str == "success" {
-            deduct_credits(&pool, org_id, log_id, meta.model.as_deref(), meta.credit_price, &usage).await;
+            deduct_credits(
+                &pool,
+                org_id,
+                log_id,
+                meta.model.as_deref(),
+                meta.credit_price,
+                protocol,
+                &usage,
+            )
+            .await;
         }
     });
 
@@ -736,6 +766,7 @@ async fn handle_streaming_response(
                 }
             }
         }
+        usage.total_tokens = protocol::normalized_total_tokens(proto, &usage);
 
         let usage_missing = !is_passthrough
             && usage.prompt_tokens.is_none()
@@ -784,7 +815,16 @@ async fn handle_streaming_response(
         if is_passthrough { return; }
 
         if status_str == "success" {
-            deduct_credits(&pool_clone, org_id, log_id, meta.model.as_deref(), meta.credit_price, &usage).await;
+            deduct_credits(
+                &pool_clone,
+                org_id,
+                log_id,
+                meta.model.as_deref(),
+                meta.credit_price,
+                proto,
+                &usage,
+            )
+            .await;
         }
     });
 
@@ -974,7 +1014,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_write_tokens_are_included_in_credit_cost() {
+    fn openai_cache_details_are_not_charged_as_regular_input() {
         let usage = TokenUsage {
             prompt_tokens: Some(100),
             completion_tokens: Some(20),
@@ -983,21 +1023,92 @@ mod tests {
             total_tokens: Some(120),
         };
 
-        let cost = calculate_token_credit_cost(&usage, 100.0, 20.0, Some(40.0), Some(30.0));
+        let cost = calculate_token_credit_cost(
+            Protocol::OpenAI,
+            &usage,
+            100.0,
+            20.0,
+            Some(40.0),
+            Some(30.0),
+        );
+        assert!((cost - 3.3).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn openai_missing_cache_rates_only_charge_uncached_input() {
+        let usage = TokenUsage {
+            prompt_tokens: Some(100),
+            completion_tokens: Some(20),
+            cached_tokens: Some(40),
+            cache_write_tokens: Some(30),
+            total_tokens: Some(120),
+        };
+
+        let cost =
+            calculate_token_credit_cost(Protocol::OpenAI, &usage, 100.0, 20.0, None, None);
+        assert!((cost - 1.3).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn openai_cache_details_are_capped_by_total_input() {
+        let usage = TokenUsage {
+            prompt_tokens: Some(50),
+            completion_tokens: Some(-10),
+            cached_tokens: Some(40),
+            cache_write_tokens: Some(30),
+            total_tokens: Some(50),
+        };
+
+        let cost = calculate_token_credit_cost(
+            Protocol::OpenAI,
+            &usage,
+            10.0,
+            10.0,
+            Some(10.0),
+            Some(10.0),
+        );
+        assert!((cost - 5.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn anthropic_cache_tokens_remain_separate_from_input_tokens() {
+        let usage = TokenUsage {
+            prompt_tokens: Some(100),
+            completion_tokens: Some(20),
+            cached_tokens: Some(40),
+            cache_write_tokens: Some(30),
+            total_tokens: Some(190),
+        };
+
+        let cost = calculate_token_credit_cost(
+            Protocol::Anthropic,
+            &usage,
+            100.0,
+            20.0,
+            Some(40.0),
+            Some(30.0),
+        );
         assert!((cost - 4.0).abs() < f64::EPSILON);
     }
 
     #[test]
-    fn missing_cache_rates_skip_cache_credit_cost() {
+    fn negative_token_counts_never_reduce_credit_cost() {
         let usage = TokenUsage {
-            prompt_tokens: None,
-            completion_tokens: None,
-            cached_tokens: Some(40),
-            cache_write_tokens: Some(30),
-            total_tokens: Some(70),
+            prompt_tokens: Some(-100),
+            completion_tokens: Some(-20),
+            cached_tokens: Some(-40),
+            cache_write_tokens: Some(-30),
+            total_tokens: Some(-120),
         };
 
-        let cost = calculate_token_credit_cost(&usage, 100.0, 20.0, None, None);
+        let cost = calculate_token_credit_cost(
+            Protocol::OpenAI,
+            &usage,
+            100.0,
+            20.0,
+            Some(40.0),
+            Some(30.0),
+        );
         assert_eq!(cost, 0.0);
     }
 }

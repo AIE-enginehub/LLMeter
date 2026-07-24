@@ -19,6 +19,42 @@ pub struct TokenUsage {
     pub total_tokens: Option<i32>,
 }
 
+/// 统一生成用于持久化和展示的总 Token。
+///
+/// OpenAI/Gemini 的输入总数已经包含缓存明细；Anthropic 的缓存读取和缓存创建
+/// 与 input_tokens 分开返回，因此只有 Anthropic 需要把缓存明细加入总数。
+pub fn normalized_total_tokens(protocol: Protocol, usage: &TokenUsage) -> Option<i32> {
+    if matches!(protocol, Protocol::OpenAI | Protocol::Gemini) {
+        let reported = usage.total_tokens.filter(|value| *value >= 0);
+        let fallback = checked_token_sum([usage.prompt_tokens, usage.completion_tokens]);
+        return match (reported, fallback) {
+            (Some(reported), Some(fallback)) => Some(reported.max(fallback)),
+            (Some(reported), None) => Some(reported),
+            (None, fallback) => fallback,
+        };
+    }
+
+    checked_token_sum([
+        usage.prompt_tokens,
+        usage.completion_tokens,
+        usage.cached_tokens,
+        usage.cache_write_tokens,
+    ])
+}
+
+fn checked_token_sum<const N: usize>(values: [Option<i32>; N]) -> Option<i32> {
+    if values.iter().all(Option::is_none) {
+        return None;
+    }
+
+    let total = values
+        .into_iter()
+        .flatten()
+        .map(|value| i64::from(value.max(0)))
+        .sum::<i64>();
+    Some(total.min(i64::from(i32::MAX)) as i32)
+}
+
 /// 需要移除的 hop-by-hop 头列表
 const HOP_BY_HOP_HEADERS: &[&str] = &[
     "connection",
@@ -467,6 +503,54 @@ pub fn merge_token_usage(base: Option<TokenUsage>, update: TokenUsage) -> TokenU
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn openai_total_does_not_add_cache_details_twice() {
+        let usage = TokenUsage {
+            prompt_tokens: Some(100),
+            completion_tokens: Some(20),
+            cached_tokens: Some(40),
+            cache_write_tokens: Some(30),
+            total_tokens: Some(120),
+        };
+
+        assert_eq!(
+            normalized_total_tokens(Protocol::OpenAI, &usage),
+            Some(120)
+        );
+    }
+
+    #[test]
+    fn openai_invalid_reported_total_falls_back_to_input_plus_output() {
+        let usage = TokenUsage {
+            prompt_tokens: Some(100),
+            completion_tokens: Some(20),
+            cached_tokens: Some(40),
+            cache_write_tokens: Some(30),
+            total_tokens: Some(5),
+        };
+
+        assert_eq!(
+            normalized_total_tokens(Protocol::OpenAI, &usage),
+            Some(120)
+        );
+    }
+
+    #[test]
+    fn anthropic_total_includes_separate_cache_buckets() {
+        let usage = TokenUsage {
+            prompt_tokens: Some(100),
+            completion_tokens: Some(20),
+            cached_tokens: Some(40),
+            cache_write_tokens: Some(30),
+            total_tokens: Some(120),
+        };
+
+        assert_eq!(
+            normalized_total_tokens(Protocol::Anthropic, &usage),
+            Some(190)
+        );
+    }
 
     #[test]
     fn openai_chat_completions_extracts_cache_write_tokens() {
