@@ -12,6 +12,8 @@ function logsTab() {
     total: 0,
     page: 1,
     pageSize: 20,
+    sortOrder: 'desc',
+    jumpPage: '',
     filter: { org_id: '', project_id: '', api_key_id: '', model: '', status: '', start_time: '', end_time: '' },
     logDetail: null,
     modelSearchTimer: null,
@@ -30,13 +32,27 @@ function logsTab() {
 
     get totalPages() { return Math.max(1, Math.ceil(this.total / this.pageSize)); },
 
+    toggleTimeSort() {
+      this.sortOrder = this.sortOrder === 'desc' ? 'asc' : 'desc';
+      this.page = 1;
+      this.load();
+    },
+
+    goToPage() {
+      const requested = Number.parseInt(this.jumpPage, 10);
+      if (!Number.isFinite(requested)) return;
+      this.page = Math.min(this.totalPages, Math.max(1, requested));
+      this.jumpPage = '';
+      this.load();
+    },
+
     async load() {
       this.loading = true;
       try {
         if (this.orgs.length === 0) {
           this.orgs = await api('/api/orgs');
         }
-        let url = `/api/logs?page=${this.page}&pageSize=${this.pageSize}`;
+        let url = `/api/logs?page=${this.page}&pageSize=${this.pageSize}&sort_order=${this.sortOrder}`;
         if (this.filter.org_id) url += `&org_id=${this.filter.org_id}`;
         if (this.filter.project_id) url += `&project_id=${this.filter.project_id}`;
         if (this.filter.api_key_id) url += `&api_key_id=${this.filter.api_key_id}`;
@@ -44,6 +60,9 @@ function logsTab() {
         if (this.filter.status) url += `&status=${this.filter.status}`;
         if (this.filter.start_time) url += `&start_time=${encodeURIComponent(this.filter.start_time.replace('T', ' '))}`;
         if (this.filter.end_time) url += `&end_time=${encodeURIComponent(this.filter.end_time.replace('T', ' '))}`;
+        if (this.filter.start_time || this.filter.end_time) {
+          url += `&timezone_offset=${new Date().getTimezoneOffset()}`;
+        }
         const res = await api(url);
         this.logs = res.data;
         this.total = res.total;

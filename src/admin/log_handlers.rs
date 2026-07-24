@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -23,6 +24,9 @@ pub(super) struct LogQuery {
     status: Option<String>,
     start_time: Option<String>,
     end_time: Option<String>,
+    /// 浏览器 Date.getTimezoneOffset()：UTC - 本地时间，单位分钟。
+    timezone_offset: Option<i32>,
+    sort_order: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -42,6 +46,11 @@ pub(super) async fn list_logs(
     let page = q.page.unwrap_or(1).max(1);
     let page_size = q.page_size.unwrap_or(20).clamp(1, 100);
     let offset = (page - 1) * page_size;
+    let sort_order = if q.sort_order.as_deref() == Some("asc") {
+        "ASC"
+    } else {
+        "DESC"
+    };
 
     // 动态构建 WHERE 条件
     let mut conditions = Vec::new();
@@ -67,18 +76,26 @@ pub(super) async fn list_logs(
         conditions.push(format!("status = ${param_idx}"));
         param_idx += 1;
     }
-    let start_ts = q.start_time.as_ref().and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
-        .or_else(|| chrono::NaiveDateTime::parse_from_str(&format!("{s} 00:00:00"), "%Y-%m-%d %H:%M:%S").ok()))
-        .map(|dt| dt.and_utc());
-    let end_ts = q.end_time.as_ref().and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
-        .or_else(|| chrono::NaiveDateTime::parse_from_str(&format!("{s} 23:59:59"), "%Y-%m-%d %H:%M:%S").ok()))
-        .map(|dt| dt.and_utc());
+    // 日期选择器使用浏览器本地日期，而数据库存储 UTC。必须先按浏览器时区
+    // 把本地自然日换算为 UTC，否则中国时区选择 23 日会查到 24 日 00:00–08:00。
+    let timezone_offset = q.timezone_offset.unwrap_or(0).clamp(-14 * 60, 14 * 60);
+    let start_ts = q
+        .start_time
+        .as_deref()
+        .and_then(|s| parse_start_time(s, timezone_offset));
+    let end_bound = q
+        .end_time
+        .as_deref()
+        .and_then(|s| parse_end_time(s, timezone_offset));
     if start_ts.is_some() {
         conditions.push(format!("created_at >= ${param_idx}"));
         param_idx += 1;
     }
-    if end_ts.is_some() {
-        conditions.push(format!("created_at <= ${param_idx}"));
+    if let Some((_, exclusive)) = end_bound {
+        conditions.push(format!(
+            "created_at {} ${param_idx}",
+            if exclusive { "<" } else { "<=" }
+        ));
         param_idx += 1;
     }
 
@@ -97,7 +114,7 @@ pub(super) async fn list_logs(
     if let Some(ref v) = q.model { count_query = count_query.bind(format!("%{v}%")); }
     if let Some(ref v) = q.status { count_query = count_query.bind(v); }
     if let Some(ref v) = start_ts { count_query = count_query.bind(v); }
-    if let Some(ref v) = end_ts { count_query = count_query.bind(v); }
+    if let Some((ref v, _)) = end_bound { count_query = count_query.bind(v); }
 
     let total = count_query
         .fetch_one(&state.pool)
@@ -114,7 +131,7 @@ pub(super) async fn list_logs(
          FROM (SELECT * FROM request_logs {where_clause}) r \
          LEFT JOIN organizations o ON o.id = r.org_id \
          LEFT JOIN projects p ON p.id = r.project_id \
-         ORDER BY r.created_at DESC \
+         ORDER BY r.created_at {sort_order}, r.id {sort_order} \
          LIMIT ${param_idx} OFFSET ${}",
         param_idx + 1
     );
@@ -126,7 +143,7 @@ pub(super) async fn list_logs(
     if let Some(ref v) = q.model { data_query = data_query.bind(format!("%{v}%")); }
     if let Some(ref v) = q.status { data_query = data_query.bind(v); }
     if let Some(ref v) = start_ts { data_query = data_query.bind(v); }
-    if let Some(ref v) = end_ts { data_query = data_query.bind(v); }
+    if let Some((ref v, _)) = end_bound { data_query = data_query.bind(v); }
     data_query = data_query.bind(page_size).bind(offset);
 
     let data = data_query
@@ -140,6 +157,37 @@ pub(super) async fn list_logs(
         page,
         page_size,
     }))
+}
+
+fn local_naive_to_utc(value: NaiveDateTime, timezone_offset: i32) -> Option<DateTime<Utc>> {
+    value
+        .checked_add_signed(Duration::minutes(timezone_offset as i64))
+        .map(|value| value.and_utc())
+}
+
+fn parse_start_time(value: &str, timezone_offset: i32) -> Option<DateTime<Utc>> {
+    let local = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S")
+        .ok()
+        .or_else(|| {
+            NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                .ok()?
+                .and_hms_opt(0, 0, 0)
+        })?;
+    local_naive_to_utc(local, timezone_offset)
+}
+
+/// 日期值使用“次日 00:00 前”的半开区间，避免漏掉 23:59:59.xxxxxx。
+/// 带具体时间的旧 API 参数仍保留包含结束时刻的行为。
+fn parse_end_time(value: &str, timezone_offset: i32) -> Option<(DateTime<Utc>, bool)> {
+    if let Ok(local) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
+        return local_naive_to_utc(local, timezone_offset).map(|value| (value, false));
+    }
+
+    let next_midnight = NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .ok()?
+        .succ_opt()?
+        .and_hms_opt(0, 0, 0)?;
+    local_naive_to_utc(next_midnight, timezone_offset).map(|value| (value, true))
 }
 
 /// GET /api/logs/:id — 日志详情
@@ -164,4 +212,28 @@ pub(super) async fn get_log(
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Log not found"))?;
 
     Ok(Json(row))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_end_time, parse_start_time};
+
+    #[test]
+    fn china_local_date_is_converted_to_correct_utc_range() {
+        let start = parse_start_time("2026-07-23", -480).unwrap();
+        let (end, exclusive) = parse_end_time("2026-07-23", -480).unwrap();
+
+        assert_eq!(start.to_rfc3339(), "2026-07-22T16:00:00+00:00");
+        assert_eq!(end.to_rfc3339(), "2026-07-23T16:00:00+00:00");
+        assert!(exclusive);
+    }
+
+    #[test]
+    fn explicit_end_time_remains_inclusive() {
+        let (end, exclusive) =
+            parse_end_time("2026-07-23 20:30:00", -480).unwrap();
+
+        assert_eq!(end.to_rfc3339(), "2026-07-23T12:30:00+00:00");
+        assert!(!exclusive);
+    }
 }

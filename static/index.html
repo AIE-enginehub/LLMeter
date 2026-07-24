@@ -828,7 +828,7 @@
               <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm overflow-hidden">
                 <div class="overflow-x-auto">
                   <table class="w-full min-w-[1180px] text-sm">
-                    <thead><tr class="text-xs text-slate-400 border-b border-slate-100 bg-slate-50/50"><th class="text-left px-3 py-2.5 font-medium" x-text="t('org_name')"></th><th class="text-left px-3 py-2.5 font-medium" x-text="t('project_name')"></th><th class="text-left px-3 py-2.5 font-medium" x-text="t('time')"></th><th class="text-left px-3 py-2.5 font-medium" x-text="t('model')"></th><th class="text-right px-3 py-2.5 font-medium">Token</th><th class="text-right px-3 py-2.5 font-medium" x-text="t('consume_credit')"></th><th class="text-right px-3 py-2.5 font-medium" x-text="t('money_cost')"></th><th class="text-right px-3 py-2.5 font-medium" x-text="t('duration')"></th></tr></thead>
+                    <thead><tr class="text-xs text-slate-400 border-b border-slate-100 bg-slate-50/50"><th class="text-left px-3 py-2.5 font-medium" x-text="t('org_name')"></th><th class="text-left px-3 py-2.5 font-medium" x-text="t('project_name')"></th><th class="text-left px-3 py-2.5 font-medium"><button @click="toggleTimeSort()" class="inline-flex items-center gap-1 hover:text-slate-700 transition" :title="t(sortOrder === 'desc' ? 'sort_time_asc' : 'sort_time_desc')"><span x-text="t('time')"></span><span class="text-[11px] text-slate-500" x-text="sortOrder === 'desc' ? '↓' : '↑'"></span></button></th><th class="text-left px-3 py-2.5 font-medium" x-text="t('model')"></th><th class="text-right px-3 py-2.5 font-medium">Token</th><th class="text-right px-3 py-2.5 font-medium" x-text="t('consume_credit')"></th><th class="text-right px-3 py-2.5 font-medium" x-text="t('money_cost')"></th><th class="text-right px-3 py-2.5 font-medium" x-text="t('duration')"></th></tr></thead>
                     <tbody>
                       <template x-for="log in logs" :key="log.id">
                         <tr @click="viewLog(log.id)"
@@ -865,6 +865,11 @@
                 <button @click="page = Math.max(1, page - 1); load()" :disabled="page <= 1" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 transition" x-text="t('prev_page')"></button>
                 <span class="text-sm text-slate-500" x-text="page + ' / ' + totalPages"></span>
                 <button @click="page = Math.min(totalPages, page + 1); load()" :disabled="page >= totalPages" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 transition" x-text="t('next_page')"></button>
+                <span class="ml-2 text-sm text-slate-400" x-text="t('jump_to_page')"></span>
+                <input x-model="jumpPage" @keydown.enter.prevent="goToPage()" type="number" min="1" :max="totalPages"
+                  class="w-16 px-2 py-1.5 text-sm text-center bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-300"
+                  :placeholder="String(page)">
+                <button @click="goToPage()" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 transition" x-text="t('jump')"></button>
               </div>
             </div>
           </template>
