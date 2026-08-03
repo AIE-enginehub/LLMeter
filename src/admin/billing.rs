@@ -4,7 +4,7 @@ use axum::{
     http::{StatusCode, header},
     response::IntoResponse,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, FixedOffset, Utc};
 use lettre::{
     AsyncSmtpTransport, AsyncTransport, Tokio1Executor,
     message::{Attachment, Mailbox, MultiPart, SinglePart, header::ContentType},
@@ -191,7 +191,8 @@ pub(super) async fn export_usage_report(
     let period_end = (end_time - chrono::TimeDelta::seconds(1))
         .format("%Y-%m-%d")
         .to_string();
-    let generated_at = chrono::Utc::now().format("%Y-%m-%d %H:%M").to_string();
+    let generated_now = to_beijing_time(Utc::now());
+    let generated_at = generated_now.format("%Y-%m-%d %H:%M").to_string();
     let period_tag = format!(
         "{}_{}",
         start_time.format("%Y%m%d"),
@@ -205,7 +206,7 @@ pub(super) async fn export_usage_report(
     let mut total_money_cost: f64 = 0.0;
 
     for (org_name, rows) in &org_groups {
-        let bill_no = generate_bill_no();
+        let bill_no = generate_bill_no(&generated_now);
         let mut projects: Vec<ProjectUsage> = Vec::new();
         for row in rows {
             let project_id = row.project_id;
@@ -407,8 +408,13 @@ fn validate_mail_settings(
 /// 内嵌的霞鹜新晰黑字体（静态 TTF 黑体，编译时打包，无运行时依赖）
 static EMBEDDED_FONT: &[u8] = include_bytes!("../../fonts/LXGWNeoXiHei.ttf");
 
-fn generate_bill_no() -> String {
-    let ts = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+fn to_beijing_time(time: DateTime<Utc>) -> DateTime<FixedOffset> {
+    let offset = FixedOffset::east_opt(8 * 60 * 60).expect("UTC+8 is a valid fixed offset");
+    time.with_timezone(&offset)
+}
+
+fn generate_bill_no(generated_at: &DateTime<FixedOffset>) -> String {
+    let ts = generated_at.format("%Y%m%d%H%M%S").to_string();
     let r: u32 = rand::random::<u32>() % 10000;
     format!("LLM-{ts}-{r:04}")
 }
@@ -835,6 +841,17 @@ mod tests {
 
         assert_eq!(request.org_id, org_id);
         assert!(request.project_ids.is_empty());
+    }
+
+    #[test]
+    fn invoice_generation_time_uses_beijing_timezone() {
+        let utc = DateTime::parse_from_rfc3339("2026-08-03T06:21:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let beijing = to_beijing_time(utc);
+
+        assert_eq!(beijing.format("%Y-%m-%d %H:%M").to_string(), "2026-08-03 14:21");
+        assert!(generate_bill_no(&beijing).starts_with("LLM-20260803142100-"));
     }
 
     #[test]
