@@ -56,8 +56,18 @@ pub(super) async fn get_mail_settings(
 pub(super) async fn update_mail_settings(
     State(state): State<Arc<AppState>>,
     _admin: AuthAdmin,
-    Json(body): Json<crate::db::MailSettings>,
+    Json(mut body): Json<crate::db::MailSettings>,
 ) -> Result<Json<crate::db::MailSettings>, (StatusCode, Json<ErrorResponse>)> {
+    body.system_contact_email = body.system_contact_email.trim().to_string();
+    if body.system_contact_email.is_empty()
+        || body.system_contact_email.parse::<lettre::Address>().is_err()
+    {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "系统联系人邮箱格式无效",
+        ));
+    }
+
     let val = serde_json::to_value(&body).unwrap();
     sqlx::query(
         "INSERT INTO global_settings (key, value) VALUES ('mail_settings', $1) \

@@ -252,10 +252,27 @@ impl Default for SmtpSettings {
     }
 }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize, Clone, Default)]
+pub const DEFAULT_SYSTEM_CONTACT_EMAIL: &str = "contact@enginehub.cn";
+
+fn default_system_contact_email() -> String {
+    DEFAULT_SYSTEM_CONTACT_EMAIL.to_string()
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 pub struct MailSettings {
+    #[serde(default = "default_system_contact_email")]
+    pub system_contact_email: String,
     #[serde(default)]
     pub outbound: SmtpSettings,
+}
+
+impl Default for MailSettings {
+    fn default() -> Self {
+        Self {
+            system_contact_email: default_system_contact_email(),
+            outbound: SmtpSettings::default(),
+        }
+    }
 }
 
 fn default_true() -> bool {

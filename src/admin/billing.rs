@@ -103,10 +103,15 @@ pub(super) async fn export_usage_report(
         body.end_time.as_deref(),
     )?;
 
+    let mail_settings = crate::db::get_mail_settings(&state.pool).await;
     if is_email {
-        let mail_settings = crate::db::get_mail_settings(&state.pool).await;
         validate_mail_settings(&mail_settings)?;
     }
+    let system_contact_email = if mail_settings.system_contact_email.trim().is_empty() {
+        crate::db::DEFAULT_SYSTEM_CONTACT_EMAIL
+    } else {
+        mail_settings.system_contact_email.trim()
+    };
 
     let org_exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM organizations WHERE id = $1)",
@@ -259,6 +264,7 @@ pub(super) async fn export_usage_report(
             &period_end,
             &generated_at,
             org_name,
+            system_contact_email,
             &projects,
             org_requests,
             org_credit,
@@ -275,7 +281,6 @@ pub(super) async fn export_usage_report(
 
     if is_email {
         // 邮件模式：发送当前企业的 PDF 附件
-        let mail_settings = crate::db::get_mail_settings(&state.pool).await;
         send_usage_report_mail(
             &mail_settings,
             &recipient,
@@ -496,6 +501,10 @@ fn right_aligned_x(value: &str, right_edge: f32, font_size: f32) -> f32 {
     right_edge - pdf_text_width_mm(value, font_size)
 }
 
+fn invoice_footer_text(system_contact_email: &str) -> String {
+    format!("此账单由系统自动生成，如有疑问请联系{system_contact_email}。")
+}
+
 /// 生成单个组织的账单 PDF（项目小计 + API Key 明细，支持自动分页）
 fn generate_org_invoice_pdf(
     bill_no: &str,
@@ -503,12 +512,15 @@ fn generate_org_invoice_pdf(
     period_end: &str,
     generated_at: &str,
     org_name: &str,
+    system_contact_email: &str,
     projects: &[ProjectUsage],
     total_requests: i64,
     total_credit: f64,
     total_money: f64,
 ) -> Result<Vec<u8>, String> {
     use printpdf::*;
+
+    let footer_text = invoice_footer_text(system_contact_email);
 
     // ── 预先收集所有文本，用于字体子集化 ──
     let mut all_text = String::new();
@@ -524,7 +536,8 @@ fn generate_org_invoice_pdf(
         format_decimal(total_credit),
         format_decimal(total_money)
     ));
-    all_text.push_str("合计续第页此账单由系统自动生成，如有疑问请联系管理员。");
+    all_text.push_str("合计续第页");
+    all_text.push_str(&footer_text);
     for project in projects.iter().filter(|project| project.has_usage()) {
         all_text.push_str(&project.name);
         all_text.push_str(&format!(
@@ -598,12 +611,7 @@ fn generate_org_invoice_pdf(
 
     // ── 页脚 ──
     fill!(0.45);
-    text!(
-        "此账单由系统自动生成，如有疑问请联系管理员。",
-        7.0,
-        lx,
-        18.0
-    );
+    text!(&footer_text, 7.0, lx, 18.0);
     text!(&format!("第 {page_number} 页"), 7.0, 172.0, 18.0);
 
     // ── 标题 ──
@@ -671,12 +679,7 @@ fn generate_org_invoice_pdf(
             layer = doc.get_page(page).get_layer(layer_index);
             page_number += 1;
             fill!(0.45);
-            text!(
-                "此账单由系统自动生成，如有疑问请联系管理员。",
-                7.0,
-                lx,
-                18.0
-            );
+            text!(&footer_text, 7.0, lx, 18.0);
             text!(&format!("第 {page_number} 页"), 7.0, 172.0, 18.0);
             fill!(0.0);
             text!("流量账单 - 费用明细（续）", 16.0, lx, 270.0);
@@ -719,12 +722,7 @@ fn generate_org_invoice_pdf(
                     layer = doc.get_page(page).get_layer(layer_index);
                     page_number += 1;
                     fill!(0.45);
-                    text!(
-                        "此账单由系统自动生成，如有疑问请联系管理员。",
-                        7.0,
-                        lx,
-                        18.0
-                    );
+                    text!(&footer_text, 7.0, lx, 18.0);
                     text!(&format!("第 {page_number} 页"), 7.0, 172.0, 18.0);
                     fill!(0.0);
                     text!("流量账单 - 费用明细（续）", 16.0, lx, 270.0);
@@ -786,12 +784,7 @@ fn generate_org_invoice_pdf(
         layer = doc.get_page(page).get_layer(layer_index);
         page_number += 1;
         fill!(0.45);
-        text!(
-            "此账单由系统自动生成，如有疑问请联系管理员。",
-            7.0,
-            lx,
-            18.0
-        );
+        text!(&footer_text, 7.0, lx, 18.0);
         text!(&format!("第 {page_number} 页"), 7.0, 172.0, 18.0);
         fill!(0.0);
         text!("流量账单 - 费用汇总", 16.0, lx, 270.0);
@@ -883,6 +876,7 @@ mod tests {
             "2026-07-31",
             "2026-07-21 10:15",
             "测试组织",
+            crate::db::DEFAULT_SYSTEM_CONTACT_EMAIL,
             &projects,
             9146,
             223194.45,
@@ -919,6 +913,7 @@ mod tests {
             "2026-07-31",
             "2026-07-21 10:15",
             "测试组织",
+            crate::db::DEFAULT_SYSTEM_CONTACT_EMAIL,
             &projects,
             1275,
             1593.75,
@@ -937,6 +932,24 @@ mod tests {
             .unwrap();
         assert!(page_count > 1);
     }
+
+    #[test]
+    fn invoice_footer_uses_configured_contact_email() {
+        assert_eq!(
+            invoice_footer_text("contact@enginehub.cn"),
+            "此账单由系统自动生成，如有疑问请联系contact@enginehub.cn。"
+        );
+    }
+
+    #[test]
+    fn legacy_mail_settings_get_default_contact_email() {
+        let settings: crate::db::MailSettings = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(
+            settings.system_contact_email,
+            crate::db::DEFAULT_SYSTEM_CONTACT_EMAIL
+        );
+    }
+
 
 }
 

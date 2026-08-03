@@ -107,6 +107,7 @@ const ERROR_MAP = {
   '结束时间必须大于开始时间': { en: 'End time must be greater than start time' },
   '请先在系统设置中配置发件服务器地址': { en: 'Please configure outbound SMTP host in settings first' },
   '请先在系统设置中配置发件邮箱': { en: 'Please configure sender email in settings first' },
+  '系统联系人邮箱格式无效': { en: 'Invalid system contact email' },
   '发件邮箱格式无效': { en: 'Sender email format is invalid' },
   '收件邮箱格式无效': { en: 'Recipient email format is invalid' },
 };

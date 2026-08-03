@@ -9,6 +9,7 @@ function settingsTab() {
     editingRate: null,
 
     mail: {
+      system_contact_email: 'contact@enginehub.cn',
       outbound: { host: '', port: 587, username: '', password: '', sender_email: '', sender_name: '', use_tls: true },
     },
     compression: { enabled: false, mode: 'prose', scope: { system: true, user: true, assistant: false }, min_field_chars: 80, min_savings_pct: 5, max_body_bytes: 8388608, emit_response_header: true },
@@ -84,7 +85,13 @@ function settingsTab() {
 
     async saveMail() {
       try {
+        const systemContactEmail = (this.mail.system_contact_email || '').trim();
+        if (!systemContactEmail) {
+          window.showToast(t('mail_system_contact_required'), 'error');
+          return;
+        }
         const payload = {
+          system_contact_email: systemContactEmail,
           outbound: {
             host: (this.mail.outbound.host || '').trim(),
             port: Number(this.mail.outbound.port) || 587,
