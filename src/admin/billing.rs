@@ -20,7 +20,9 @@ use crate::state::AppState;
 
 #[derive(Deserialize)]
 pub(super) struct ExportUsageReportRequest {
-    org_ids: Vec<Uuid>,
+    org_id: Uuid,
+    #[serde(default)]
+    project_ids: Vec<Uuid>,
     month: Option<String>,
     start_time: Option<String>,
     end_time: Option<String>,
@@ -84,10 +86,6 @@ pub(super) async fn export_usage_report(
     _admin: AuthAdmin,
     Json(body): Json<ExportUsageReportRequest>,
 ) -> Result<axum::response::Response, (StatusCode, Json<ErrorResponse>)> {
-    if body.org_ids.is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "请至少选择一个企业"));
-    }
-
     let is_email = body.delivery.as_deref() == Some("email");
     let recipient = body
         .recipient_email
@@ -110,7 +108,45 @@ pub(super) async fn export_usage_report(
         validate_mail_settings(&mail_settings)?;
     }
 
-    // 查询所有选中组织下的项目及 API Key；无用量的项目/Key 也保留并显示为 0。
+    let org_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM organizations WHERE id = $1)",
+    )
+    .bind(body.org_id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if !org_exists {
+        return Err(err(StatusCode::BAD_REQUEST, "所选企业不存在，请刷新后重试"));
+    }
+
+    let mut project_ids = body.project_ids.clone();
+    project_ids.sort_unstable();
+    project_ids.dedup();
+    if !project_ids.is_empty() {
+        let owned_projects: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::BIGINT FROM projects WHERE org_id = $1 AND id = ANY($2)",
+        )
+        .bind(body.org_id)
+        .bind(&project_ids)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if owned_projects != project_ids.len() as i64 {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "所选项目不属于当前企业，请刷新后重试",
+            ));
+        }
+    }
+
+    // 空数组表示导出该企业的全部项目。
+    let project_filter = if project_ids.is_empty() {
+        None
+    } else {
+        Some(project_ids)
+    };
+
+    // 查询所选企业下的全部或指定项目及 API Key。
     let details = sqlx::query_as::<_, UsageReportDetailRow>(
         "SELECT o.name AS org_name, \
                 p.id AS project_id, \
@@ -125,13 +161,15 @@ pub(super) async fn export_usage_report(
          LEFT JOIN api_keys k ON k.project_id = p.id \
          LEFT JOIN request_logs r ON r.api_key_id = k.id \
               AND r.created_at >= $2 AND r.created_at < $3 \
-         WHERE o.id = ANY($1) \
+         WHERE o.id = $1 \
+           AND ($4::UUID[] IS NULL OR p.id = ANY($4)) \
          GROUP BY o.name, p.id, p.name, k.id, k.name \
          ORDER BY o.name, p.name, k.name",
     )
-    .bind(&body.org_ids)
+    .bind(body.org_id)
     .bind(start_time)
     .bind(end_time)
+    .bind(project_filter)
     .fetch_all(&state.pool)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -227,7 +265,7 @@ pub(super) async fn export_usage_report(
         )
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-        let filename = format!("LLMeter账单_{org_name}_{period_tag}.pdf");
+        let filename = format!("流量账单_{org_name}_{period_tag}.pdf");
         pdf_attachments.push(PdfAttachment {
             filename,
             data: pdf_data,
@@ -235,7 +273,7 @@ pub(super) async fn export_usage_report(
     }
 
     if is_email {
-        // 邮件模式：批量发送所有组织的 PDF 附件
+        // 邮件模式：发送当前企业的 PDF 附件
         let mail_settings = crate::db::get_mail_settings(&state.pool).await;
         send_usage_report_mail(
             &mail_settings,
@@ -249,7 +287,7 @@ pub(super) async fn export_usage_report(
             ok: true,
             start_time,
             end_time,
-            org_count: body.org_ids.len(),
+            org_count: 1,
             total_requests,
             total_credit_cost,
             total_money_cost,
@@ -257,7 +295,7 @@ pub(super) async fn export_usage_report(
         .into_response());
     }
 
-    // 下载模式：返回第一个组织的 PDF（前端逐个组织发起请求）
+    // 下载模式：返回当前企业的 PDF
     let att = pdf_attachments
         .into_iter()
         .next()
@@ -468,19 +506,19 @@ fn generate_org_invoice_pdf(
 
     // ── 预先收集所有文本，用于字体子集化 ──
     let mut all_text = String::new();
-    all_text.push_str("LLMeter 账单");
+    all_text.push_str("流量账单");
     all_text.push_str(&format!("账单编号：{bill_no}"));
     all_text.push_str(&format!("账单周期：{period_start} ～ {period_end}"));
     all_text.push_str(&format!("生成时间：{generated_at}"));
-    all_text.push_str(&format!("组织：{org_name}"));
-    all_text.push_str("总调用次数Credit 用量应付金额费用明细调用次数金额 (¥)项目：项目合计暂无 API Key 用量LLMeter 账单 - 费用明细（续）LLMeter 账单 - 费用汇总组织账单周期（续）");
+    all_text.push_str(&format!("客户：{org_name}"));
+    all_text.push_str("总调用次数Credit 用量应付金额费用明细调用次数金额 (¥)项目：项目合计暂无 API Key 用量流量账单 - 费用明细（续）流量账单 - 费用汇总客户账单周期（续）");
     all_text.push_str(&format!(
         "{}{}¥{}",
         format_integer(total_requests),
         format_decimal(total_credit),
         format_decimal(total_money)
     ));
-    all_text.push_str("合计续第页此账单由 LLMeter 系统自动生成，如有疑问请联系管理员。");
+    all_text.push_str("合计续第页此账单由系统自动生成，如有疑问请联系管理员。");
     for project in projects.iter().filter(|project| project.has_usage()) {
         all_text.push_str(&project.name);
         all_text.push_str(&format!(
@@ -502,7 +540,7 @@ fn generate_org_invoice_pdf(
 
     let font_data = subset_font(&all_text)?;
 
-    let (doc, page1, layer1) = PdfDocument::new("LLMeter Invoice", Mm(210.0), Mm(297.0), "Layer 1");
+    let (doc, page1, layer1) = PdfDocument::new("Traffic Invoice", Mm(210.0), Mm(297.0), "Layer 1");
     let font = doc
         .add_external_font(&mut std::io::Cursor::new(&font_data))
         .map_err(|e| format!("子集字体加载失败: {e}"))?;
@@ -555,7 +593,7 @@ fn generate_org_invoice_pdf(
     // ── 页脚 ──
     fill!(0.45);
     text!(
-        "此账单由 LLMeter 系统自动生成，如有疑问请联系管理员。",
+        "此账单由系统自动生成，如有疑问请联系管理员。",
         7.0,
         lx,
         18.0
@@ -564,7 +602,7 @@ fn generate_org_invoice_pdf(
 
     // ── 标题 ──
     fill!(0.0);
-    text!("LLMeter 账单", 22.0, lx, y);
+    text!("流量账单", 22.0, lx, y);
     y -= 16.0;
 
     // ── 账单信息 ──
@@ -579,7 +617,7 @@ fn generate_org_invoice_pdf(
     y -= 5.5;
     text!(&format!("生成时间：{generated_at}"), 9.0, lx, y);
     fill!(0.0);
-    text!(&format!("组织：{org_name}"), 9.0, 108.0, y);
+    text!(&format!("客户：{org_name}"), 9.0, 108.0, y);
     y -= 8.0;
 
     // ── 分割线 ──
@@ -628,16 +666,16 @@ fn generate_org_invoice_pdf(
             page_number += 1;
             fill!(0.45);
             text!(
-                "此账单由 LLMeter 系统自动生成，如有疑问请联系管理员。",
+                "此账单由系统自动生成，如有疑问请联系管理员。",
                 7.0,
                 lx,
                 18.0
             );
             text!(&format!("第 {page_number} 页"), 7.0, 172.0, 18.0);
             fill!(0.0);
-            text!("LLMeter 账单 - 费用明细（续）", 16.0, lx, 270.0);
+            text!("流量账单 - 费用明细（续）", 16.0, lx, 270.0);
             fill!(0.35);
-            text!(&format!("组织：{org_name}"), 8.0, lx, 260.0);
+            text!(&format!("客户：{org_name}"), 8.0, lx, 260.0);
             text!(
                 &format!("账单周期：{period_start} ～ {period_end}"),
                 8.0,
@@ -676,16 +714,16 @@ fn generate_org_invoice_pdf(
                     page_number += 1;
                     fill!(0.45);
                     text!(
-                        "此账单由 LLMeter 系统自动生成，如有疑问请联系管理员。",
+                        "此账单由系统自动生成，如有疑问请联系管理员。",
                         7.0,
                         lx,
                         18.0
                     );
                     text!(&format!("第 {page_number} 页"), 7.0, 172.0, 18.0);
                     fill!(0.0);
-                    text!("LLMeter 账单 - 费用明细（续）", 16.0, lx, 270.0);
+                    text!("流量账单 - 费用明细（续）", 16.0, lx, 270.0);
                     fill!(0.35);
-                    text!(&format!("组织：{org_name}"), 8.0, lx, 260.0);
+                    text!(&format!("客户：{org_name}"), 8.0, lx, 260.0);
                     text!(
                         &format!("账单周期：{period_start} ～ {period_end}"),
                         8.0,
@@ -743,16 +781,16 @@ fn generate_org_invoice_pdf(
         page_number += 1;
         fill!(0.45);
         text!(
-            "此账单由 LLMeter 系统自动生成，如有疑问请联系管理员。",
+            "此账单由系统自动生成，如有疑问请联系管理员。",
             7.0,
             lx,
             18.0
         );
         text!(&format!("第 {page_number} 页"), 7.0, 172.0, 18.0);
         fill!(0.0);
-        text!("LLMeter 账单 - 费用汇总", 16.0, lx, 270.0);
+        text!("流量账单 - 费用汇总", 16.0, lx, 270.0);
         fill!(0.35);
-        text!(&format!("组织：{org_name}"), 8.0, lx, 260.0);
+        text!(&format!("客户：{org_name}"), 8.0, lx, 260.0);
         text!(
             &format!("账单周期：{period_start} ～ {period_end}"),
             8.0,
@@ -784,6 +822,20 @@ fn generate_org_invoice_pdf(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn export_request_defaults_to_all_projects() {
+        let org_id = Uuid::new_v4();
+        let request: ExportUsageReportRequest = serde_json::from_value(serde_json::json!({
+            "org_id": org_id,
+            "month": "2026-08",
+            "delivery": "download"
+        }))
+        .unwrap();
+
+        assert_eq!(request.org_id, org_id);
+        assert!(request.project_ids.is_empty());
+    }
 
     #[test]
     fn invoice_numbers_use_grouping_separators() {
@@ -868,6 +920,7 @@ mod tests {
             .unwrap();
         assert!(page_count > 1);
     }
+
 }
 
 async fn send_usage_report_mail(
@@ -895,13 +948,13 @@ async fn send_usage_report_mail(
         .map_err(|_| err(StatusCode::BAD_REQUEST, "收件邮箱格式无效"))?;
 
     let subject = format!(
-        "LLMeter 账单 {} - {}",
+        "流量账单 {} - {}",
         start_time.format("%Y-%m-%d"),
         (end_time - chrono::TimeDelta::seconds(1)).format("%Y-%m-%d")
     );
 
     let att_count = attachments.len();
-    let body_text = format!("请查收附件中的 LLMeter 使用账单（共 {att_count} 份）。");
+    let body_text = format!("请查收附件中的流量账单（共 {att_count} 份）。");
 
     let mut mp = MultiPart::mixed().singlepart(SinglePart::plain(body_text));
 

@@ -1196,14 +1196,33 @@
                 <div class="space-y-4">
                   <!-- 企业选择 -->
                   <div>
-                    <label class="block text-sm text-slate-600 mb-2" x-text="t('export_select_orgs')"></label>
-                    <div class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto border border-slate-200 rounded-lg p-3">
+                    <label class="block text-sm text-slate-600 mb-1.5" x-text="t('export_select_org')"></label>
+                    <select x-model="exportForm.org_id" @change="onExportOrgChange()" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                      <option value="" x-text="t('export_select_org_placeholder')"></option>
                       <template x-for="o in orgs" :key="o.id">
-                        <label class="flex items-center gap-2 text-sm text-slate-700">
-                          <input type="checkbox" :checked="exportForm.org_ids.includes(o.id)" @change="toggleExportOrg(o.id)">
-                          <span x-text="o.name"></span>
-                        </label>
+                        <option :value="o.id" x-text="o.name"></option>
                       </template>
+                    </select>
+                  </div>
+
+                  <!-- 项目选择 -->
+                  <div x-show="exportForm.org_id">
+                    <label class="block text-sm text-slate-600 mb-2" x-text="t('export_select_projects')"></label>
+                    <div class="max-h-48 overflow-y-auto border border-slate-200 rounded-lg p-3">
+                      <label x-show="exportProjects.length > 0" class="flex items-center gap-2 pb-2 mb-2 border-b border-slate-100 text-sm font-medium text-slate-700">
+                        <input type="checkbox" :checked="allExportProjectsSelected()" @change="toggleAllExportProjects()"
+                          x-effect="$el.indeterminate = exportForm.project_ids.length > 0 && !allExportProjectsSelected()">
+                        <span x-text="t('all_projects')"></span>
+                      </label>
+                      <div class="grid grid-cols-2 gap-2">
+                        <template x-for="project in exportProjects" :key="project.id">
+                          <label class="flex items-center gap-2 text-sm text-slate-700">
+                            <input type="checkbox" :checked="exportForm.project_ids.includes(project.id)" @change="toggleExportProject(project.id)">
+                            <span x-text="project.name"></span>
+                          </label>
+                        </template>
+                      </div>
+                      <p x-show="exportProjects.length === 0" class="text-sm text-slate-400 text-center py-2" x-text="t('no_project')"></p>
                     </div>
                   </div>
 

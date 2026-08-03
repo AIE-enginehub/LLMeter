@@ -16,11 +16,13 @@ function usageTab() {
     orgs: [],
     orgProjects: [],
     orgKeys: [],
+    exportProjects: [],
     /** 当前视角: 'token' | 'credit' */
     perspective: 'token',
     filter: { org_id: '', project_id: '', api_key_id: '', model: '' },
     exportForm: {
-      org_ids: [],
+      org_id: '',
+      project_ids: [],
       mode: 'month', // month | custom
       month: '',
       start_time: '',
@@ -110,18 +112,45 @@ function usageTab() {
       await this.load();
     },
 
-    toggleExportOrg(orgId) {
-      const idx = this.exportForm.org_ids.indexOf(orgId);
-      if (idx >= 0) this.exportForm.org_ids.splice(idx, 1);
-      else this.exportForm.org_ids.push(orgId);
+    async onExportOrgChange() {
+      this.exportProjects = [];
+      this.exportForm.project_ids = [];
+      if (!this.exportForm.org_id) return;
+      const orgId = this.exportForm.org_id;
+      try {
+        const projects = await api(`/api/orgs/${orgId}/projects`);
+        if (this.exportForm.org_id !== orgId) return;
+        this.exportProjects = projects;
+        this.exportForm.project_ids = this.exportProjects.map(project => project.id);
+      } catch {
+        if (this.exportForm.org_id === orgId) this.exportProjects = [];
+      }
     },
 
-    openExport() {
+    toggleExportProject(projectId) {
+      const idx = this.exportForm.project_ids.indexOf(projectId);
+      if (idx >= 0) this.exportForm.project_ids.splice(idx, 1);
+      else this.exportForm.project_ids.push(projectId);
+    },
+
+    allExportProjectsSelected() {
+      return this.exportProjects.length > 0
+        && this.exportForm.project_ids.length === this.exportProjects.length;
+    },
+
+    toggleAllExportProjects() {
+      this.exportForm.project_ids = this.allExportProjectsSelected()
+        ? []
+        : this.exportProjects.map(project => project.id);
+    },
+
+    async openExport() {
       this.showExportModal = true;
       if (!this.exportForm.recipient_email) this.exportForm.recipient_email = '';
-      if (this.exportForm.org_ids.length === 0 && this.filter.org_id) {
-        this.exportForm.org_ids = [this.filter.org_id];
+      if (!this.exportForm.org_id && this.filter.org_id) {
+        this.exportForm.org_id = this.filter.org_id;
       }
+      await this.onExportOrgChange();
       if (!this.exportForm.month) this.exportForm.month = new Date().toISOString().slice(0, 7);
       this.exportMonthYear = Number((this.exportForm.month || '').slice(0, 4)) || new Date().getFullYear();
       this.showExportMonthPanel = false;
@@ -170,8 +199,12 @@ function usageTab() {
     },
 
     async submitExport() {
-      if (this.exportForm.org_ids.length === 0) {
+      if (!this.exportForm.org_id) {
         window.showToast(t('export_org_required'), 'error');
+        return;
+      }
+      if (this.exportProjects.length > 0 && this.exportForm.project_ids.length === 0) {
+        window.showToast(t('export_project_required'), 'error');
         return;
       }
       const isEmail = this.exportForm.delivery === 'email';
@@ -180,7 +213,9 @@ function usageTab() {
         return;
       }
       const payload = {
-        org_ids: this.exportForm.org_ids,
+        org_id: this.exportForm.org_id,
+        // 全选时发送空数组，由后端解释为该企业的全部项目。
+        project_ids: this.allExportProjectsSelected() ? [] : this.exportForm.project_ids,
         month: null,
         start_time: null,
         end_time: null,
@@ -212,29 +247,26 @@ function usageTab() {
           this.showExportModal = false;
           window.showToast(t('export_success'));
         } else {
-          for (const orgId of this.exportForm.org_ids) {
-            const singlePayload = { ...payload, org_ids: [orgId] };
-            const resp = await fetch('/api/usage/export_report', {
-              method: 'POST',
-              credentials: 'same-origin',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(singlePayload),
-            });
-            if (!resp.ok) {
-              const errBody = await resp.json().catch(() => null);
-              throw new Error(errBody?.error || resp.statusText);
-            }
-            const disposition = resp.headers.get('Content-Disposition') || '';
-            const match = disposition.match(/filename="?([^"]+)"?/);
-            const filename = match ? decodeURIComponent(match[1]) : 'LLMeter账单.pdf';
-            const blob = await resp.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url; a.download = filename;
-            document.body.appendChild(a); a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+          const resp = await fetch('/api/usage/export_report', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!resp.ok) {
+            const errBody = await resp.json().catch(() => null);
+            throw new Error(errBody?.error || resp.statusText);
           }
+          const disposition = resp.headers.get('Content-Disposition') || '';
+          const match = disposition.match(/filename="?([^"]+)"?/);
+          const filename = match ? decodeURIComponent(match[1]) : '流量账单.pdf';
+          const blob = await resp.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = filename;
+          document.body.appendChild(a); a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
           this.showExportModal = false;
           window.showToast(t('export_download_success'));
         }
