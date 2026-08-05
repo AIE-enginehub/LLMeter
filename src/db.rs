@@ -15,6 +15,7 @@ pub struct Organization {
     pub credit: rust_decimal::Decimal,
     pub overdraft_limit: rust_decimal::Decimal,
     pub credit_price: rust_decimal::Decimal,
+    pub billing_mode: String,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -91,6 +92,10 @@ pub async fn run_migrations(pool: &PgPool) {
         ("010_model_credit_rates",  include_str!("../migrations/010_model_credit_rates.sql")),
         ("011_cache_write_tokens",  include_str!("../migrations/011_cache_write_tokens.sql")),
         ("012_optional_cache_rates", include_str!("../migrations/012_optional_cache_rates.sql")),
+        ("013_standard_pricing",     include_str!("../migrations/013_standard_pricing.sql")),
+        ("014_seed_model_pricings",  include_str!("../migrations/014_seed_model_pricings.sql")),
+        ("015_remove_unwanted_model_pricings", include_str!("../migrations/015_remove_unwanted_model_pricings.sql")),
+        ("016_seed_gemini_model_pricings", include_str!("../migrations/016_seed_gemini_model_pricings.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -146,7 +151,7 @@ pub async fn find_api_key_by_hash(
         SELECT
             k.id AS k_id, k.org_id, k.project_id, k.name AS k_name, k.key_hash, k.key_prefix,
             k.is_active AS k_active, k.last_used_at, k.created_at AS k_created,
-            o.id AS o_id, o.name AS o_name, o.slug, o.credit, o.overdraft_limit, o.credit_price,
+            o.id AS o_id, o.name AS o_name, o.slug, o.credit, o.overdraft_limit, o.credit_price, o.billing_mode,
             o.is_active AS o_active, o.created_at AS o_created, o.updated_at AS o_updated
         FROM api_keys k
         JOIN organizations o ON o.id = k.org_id
@@ -177,6 +182,7 @@ pub async fn find_api_key_by_hash(
         credit: rec.get("credit"),
         overdraft_limit: rec.get("overdraft_limit"),
         credit_price: rec.get("credit_price"),
+        billing_mode: rec.get("billing_mode"),
         is_active: rec.get("o_active"),
         created_at: rec.get("o_created"),
         updated_at: rec.get("o_updated"),
@@ -496,4 +502,144 @@ pub async fn list_model_credit_rates(pool: &PgPool) -> Vec<ModelCreditRate> {
     .fetch_all(pool)
     .await
     .unwrap_or_default()
+}
+
+// ============================================================
+// 标准价格计费
+// ============================================================
+
+/// 请求开始时选定的不可变模型价格版本。
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
+pub struct StandardModelPrice {
+    pub pricing_id: Uuid,
+    pub price_version_id: Uuid,
+    pub provider: String,
+    pub model_name: String,
+    pub version: i32,
+    pub currency: String,
+    pub region_type: String,
+    pub input_price: rust_decimal::Decimal,
+    pub cached_input_price: Option<rust_decimal::Decimal>,
+    pub cache_write_price: Option<rust_decimal::Decimal>,
+    pub output_price: rust_decimal::Decimal,
+    pub long_context_threshold: Option<i64>,
+    pub long_input_price: Option<rust_decimal::Decimal>,
+    pub long_cached_price: Option<rust_decimal::Decimal>,
+    pub long_cache_write_price: Option<rust_decimal::Decimal>,
+    pub long_output_price: Option<rust_decimal::Decimal>,
+    pub multiplier: rust_decimal::Decimal,
+    pub exchange_rate: rust_decimal::Decimal,
+    pub effective_at: DateTime<Utc>,
+}
+
+pub const STANDARD_MODEL_PRICE_COLS: &str =
+    "p.id AS pricing_id, v.id AS price_version_id, p.provider, p.model_name, v.version, \
+     v.currency, v.region_type, v.input_price, v.cached_input_price, v.cache_write_price, \
+     v.output_price, v.long_context_threshold, v.long_input_price, v.long_cached_price, \
+     v.long_cache_write_price, v.long_output_price, v.multiplier, v.exchange_rate, v.effective_at";
+
+/// 优先匹配具体服务商，其次匹配服务商为空的通用价格；只选择请求开始时已生效的版本。
+pub async fn find_standard_model_price(
+    pool: &PgPool,
+    provider: &str,
+    model: &str,
+    at: DateTime<Utc>,
+) -> Option<StandardModelPrice> {
+    sqlx::query_as::<_, StandardModelPrice>(&format!(
+        "SELECT {STANDARD_MODEL_PRICE_COLS} \
+         FROM model_pricings p \
+         JOIN LATERAL ( \
+             SELECT * FROM model_price_versions pv \
+             WHERE pv.pricing_id = p.id AND pv.effective_at <= $3 \
+             ORDER BY pv.effective_at DESC, pv.version DESC LIMIT 1 \
+         ) v ON true \
+         WHERE p.is_active = true AND p.model_name = $2 AND (p.provider = $1 OR p.provider = '') \
+         ORDER BY CASE WHEN p.provider = $1 THEN 0 ELSE 1 END LIMIT 1"
+    ))
+    .bind(provider)
+    .bind(model)
+    .bind(at)
+    .fetch_optional(pool)
+    .await
+    .ok()?
+}
+
+#[derive(Debug, Clone)]
+pub struct StandardChargeSnapshot {
+    pub billing_mode: &'static str,
+    pub price_version_id: Uuid,
+    pub official_cost: rust_decimal::Decimal,
+    pub official_currency: String,
+    pub exchange_rate: rust_decimal::Decimal,
+    pub official_cost_cny: rust_decimal::Decimal,
+    pub price_multiplier: rust_decimal::Decimal,
+    pub money_cost: rust_decimal::Decimal,
+    pub credit_cost: rust_decimal::Decimal,
+    pub is_long_context: bool,
+}
+
+/// 原子写入费用快照、扣减余额并记录积分流水。
+/// 通过锁定请求日志并检查 credit_cost，保证同一请求不会重复扣款。
+pub async fn apply_standard_charge(
+    pool: &PgPool,
+    org_id: Uuid,
+    log_id: Uuid,
+    charge: &StandardChargeSnapshot,
+) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let existing: Option<rust_decimal::Decimal> = sqlx::query_scalar(
+        "SELECT credit_cost FROM request_logs WHERE id = $1 FOR UPDATE",
+    )
+    .bind(log_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if existing.is_some() {
+        tx.rollback().await?;
+        return Ok(false);
+    }
+
+    let balance_after: rust_decimal::Decimal = sqlx::query_scalar(
+        "UPDATE organizations SET credit = credit - $1, updated_at = now() \
+         WHERE id = $2 RETURNING credit",
+    )
+    .bind(charge.credit_cost)
+    .bind(org_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if !charge.credit_cost.is_zero() {
+        sqlx::query(
+            "INSERT INTO credit_logs (org_id, amount, balance_after, transaction_type, reference_id) \
+             VALUES ($1, $2, $3, 'consume', $4)",
+        )
+        .bind(org_id)
+        .bind(-charge.credit_cost)
+        .bind(balance_after)
+        .bind(log_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    sqlx::query(
+        "UPDATE request_logs SET billing_mode = $2, price_version_id = $3, official_cost = $4, \
+             official_currency = $5, exchange_rate = $6, official_cost_cny = $7, \
+             price_multiplier = $8, money_cost = $9, credit_cost = $10, is_long_context = $11 \
+         WHERE id = $1",
+    )
+    .bind(log_id)
+    .bind(charge.billing_mode)
+    .bind(charge.price_version_id)
+    .bind(charge.official_cost)
+    .bind(&charge.official_currency)
+    .bind(charge.exchange_rate)
+    .bind(charge.official_cost_cny)
+    .bind(charge.price_multiplier)
+    .bind(charge.money_cost)
+    .bind(charge.credit_cost)
+    .bind(charge.is_long_context)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(true)
 }

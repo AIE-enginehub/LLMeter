@@ -127,7 +127,9 @@ pub(super) async fn list_logs(
                 r.project_id, p.name AS project_name, r.api_key_id, r.provider, r.model, r.path, r.method, r.is_stream, \
                 r.response_status, r.status, r.prompt_tokens, r.completion_tokens, r.cached_tokens, r.cache_write_tokens, \
                 COALESCE(r.total_tokens, COALESCE(r.prompt_tokens, 0) + COALESCE(r.completion_tokens, 0)) AS total_tokens, \
-                r.duration_ms, r.error_message, r.credit_cost, r.money_cost, r.is_long_context, r.compressed, r.est_tokens_saved, r.created_at \
+                r.duration_ms, r.error_message, r.credit_cost, r.money_cost, r.billing_mode, r.price_version_id, \
+                r.official_cost, r.official_currency, r.exchange_rate, r.official_cost_cny, r.price_multiplier, \
+                r.is_long_context, r.compressed, r.est_tokens_saved, r.created_at \
          FROM (SELECT * FROM request_logs {where_clause}) r \
          LEFT JOIN organizations o ON o.id = r.org_id \
          LEFT JOIN projects p ON p.id = r.project_id \
@@ -200,7 +202,8 @@ pub(super) async fn get_log(
         "SELECT id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, \
                 request_body, response_body, response_status, status, \
                 prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens, total_tokens, \
-                duration_ms, error_message, credit_cost, money_cost, is_long_context, \
+                duration_ms, error_message, credit_cost, money_cost, billing_mode, price_version_id, \
+                official_cost, official_currency, exchange_rate, official_cost_cny, price_multiplier, is_long_context, \
                 compressed, compression_mode, original_prompt_chars, forwarded_prompt_chars, est_tokens_saved, \
                 created_at, updated_at \
          FROM request_logs WHERE id = $1",

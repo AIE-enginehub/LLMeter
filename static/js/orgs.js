@@ -4,6 +4,7 @@
 function orgsTab() {
   return {
     loading: false,
+    orgSubTab: 'info',
     orgs: [],
     selectedOrg: null,
     editOrg: { credit: 0, credit_price: 0 },
@@ -27,7 +28,7 @@ function orgsTab() {
     showCreateOrg: false,
     showRecharge: false,
     showCreditLogs: false,
-    newOrg: { name: '', slug: '' },
+    newOrg: { name: '', slug: '', billing_mode: 'standard_pricing' },
     rechargeAmount: 0,
     rechargeNote: '',
     creditLogs: [],
@@ -60,7 +61,7 @@ function orgsTab() {
 
     async selectOrg(org) {
       this.selectedOrg = org;
-      this.editOrg = { name: org.name, slug: org.slug, is_active: org.is_active ? 'true' : 'false', credit: org.credit || 0, overdraft_limit: org.overdraft_limit || 0, credit_price: org.credit_price || 0, total_consumed: org.total_consumed || 0 };
+      this.editOrg = { name: org.name, slug: org.slug, is_active: org.is_active ? 'true' : 'false', billing_mode: org.billing_mode || 'contract_ratio', credit: org.credit || 0, overdraft_limit: org.overdraft_limit || 0, credit_price: org.credit_price || 0, total_consumed: org.total_consumed || 0 };
       this.selectedProject = null;
       this.keys = [];
       await Promise.all([this.loadProjects(), this.loadModels()]);
@@ -211,7 +212,7 @@ function orgsTab() {
     async createOrg() {
       try {
         const created = await api('/api/orgs', { method: 'POST', body: JSON.stringify(this.newOrg) });
-        this.newOrg = { name: '', slug: '' };
+        this.newOrg = { name: '', slug: '', billing_mode: 'standard_pricing' };
         this.showCreateOrg = false;
         window.showToast(t('org_created'));
         this.orgs = await api('/api/orgs');
@@ -226,11 +227,13 @@ function orgsTab() {
           name: this.editOrg.name,
           slug: this.editOrg.slug,
           is_active: this.editOrg.is_active === 'true' || this.editOrg.is_active === true,
+          billing_mode: this.editOrg.billing_mode,
           overdraft_limit: Number(this.editOrg.overdraft_limit) || 0,
           credit_price: Number(this.editOrg.credit_price) || 0
         }) });
         Object.assign(this.selectedOrg, updated);
         this.editOrg.is_active = updated.is_active;
+        this.editOrg.billing_mode = updated.billing_mode;
         this.editOrg.overdraft_limit = updated.overdraft_limit || 0;
         this.editOrg.credit_price = updated.credit_price || 0;
         this.editOrg.total_consumed = updated.total_consumed || 0;
@@ -255,7 +258,9 @@ function orgsTab() {
       try {
         const updated = await api(`/api/orgs/${this.selectedOrg.id}/credit`, {
           method: 'POST',
-          body: JSON.stringify({ amount: Number(this.rechargeAmount), note: this.rechargeNote })
+          body: JSON.stringify(this.editOrg.billing_mode === 'standard_pricing'
+            ? { amount_yuan: Number(this.rechargeAmount), note: this.rechargeNote }
+            : { amount: Number(this.rechargeAmount), note: this.rechargeNote })
         });
         Object.assign(this.selectedOrg, updated);
         this.editOrg.credit = updated.credit;

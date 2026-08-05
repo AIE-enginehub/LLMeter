@@ -5,8 +5,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use bytes::Bytes;
+use chrono::Utc;
 use futures::stream::{self, StreamExt};
-use rust_decimal::prelude::FromPrimitive;
+use rust_decimal::{Decimal, RoundingStrategy, prelude::FromPrimitive};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -24,6 +25,8 @@ struct LogMeta {
     project_id: Option<Uuid>,
     api_key_id: Uuid,
     credit_price: rust_decimal::Decimal,
+    billing_mode: String,
+    standard_price: Option<crate::db::StandardModelPrice>,
     provider: String,
     model: Option<String>,
     path: String,
@@ -150,8 +153,8 @@ pub async fn proxy_handler(
         };
         let log_id = Uuid::new_v4();
         let _ = sqlx::query(
-            "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, request_body, status, error_message, response_status, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, $9, 'error', 'Insufficient quota', 402, now())"
+            "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, request_body, status, error_message, response_status, billing_mode, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, $9, 'error', 'Insufficient quota', 402, $10, now())"
         )
         .bind(log_id)
         .bind(org.id)
@@ -162,6 +165,7 @@ pub async fn proxy_handler(
         .bind(&path)
         .bind(method.to_string())
         .bind(body_json.as_ref())
+        .bind(&org.billing_mode)
         .execute(&state.pool)
         .await;
         return Err((
@@ -246,6 +250,22 @@ pub async fn proxy_handler(
             "gemini" => Protocol::Gemini,
             _ => detected_protocol,
         };
+        // 标准计费在调用上游前锁定已生效的价格版本，避免成功调用后无法计费。
+        let standard_price = if org.billing_mode == "standard_pricing" && !is_passthrough {
+            let model = model_name.as_deref().expect("non-passthrough request has model");
+            match crate::db::find_standard_model_price(&state.pool, &model_config.name, model, Utc::now()).await {
+                Some(price) => Some(price),
+                None => {
+                    last_error = Some((
+                        StatusCode::PRECONDITION_FAILED,
+                        format!("模型 '{model}' 尚未配置已生效的标准价格"),
+                    ));
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
         let is_stream = protocol::is_streaming(actual_protocol, body_ref, &path);
 
         // 为 OpenAI Chat Completions 流式请求自动注入 stream_options 以获取 usage 数据
@@ -321,14 +341,15 @@ pub async fn proxy_handler(
                 tracing::warn!("Upstream request failed via '{}': {e}, trying next config...", model_config.name);
                 let fail_id = Uuid::new_v4();
                 let _ = sqlx::query(
-                    "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, request_body, status, error_message, duration_ms, updated_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'error', $11, $12, now())"
+                    "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, request_body, status, error_message, duration_ms, billing_mode, updated_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'error', $11, $12, $13, now())"
                 )
                 .bind(fail_id).bind(org.id).bind(api_key_record.project_id).bind(api_key_record.id)
                 .bind(&model_config.name).bind(model_name.as_deref()).bind(&path).bind(method.to_string())
                 .bind(is_stream).bind(body_json.as_ref())
                 .bind(format!("Upstream unreachable: {e}"))
                 .bind(start.elapsed().as_millis() as i32)
+                .bind(&org.billing_mode)
                 .execute(&state.pool).await;
                 last_error = Some((StatusCode::BAD_GATEWAY, format!("Upstream unreachable: {e}")));
                 continue;
@@ -350,8 +371,8 @@ pub async fn proxy_handler(
 
             let fail_id = Uuid::new_v4();
             let _ = sqlx::query(
-                "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, request_body, status, error_message, response_status, response_body, duration_ms, updated_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'error', $11, $12, $13, $14, now())"
+                "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, request_body, status, error_message, response_status, response_body, duration_ms, billing_mode, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'error', $11, $12, $13, $14, $15, now())"
             )
             .bind(fail_id).bind(org.id).bind(api_key_record.project_id).bind(api_key_record.id)
             .bind(&model_config.name).bind(model_name.as_deref()).bind(&path).bind(method.to_string())
@@ -360,6 +381,7 @@ pub async fn proxy_handler(
             .bind(resp_status.as_u16() as i32)
             .bind(err_body)
             .bind(start.elapsed().as_millis() as i32)
+            .bind(&org.billing_mode)
             .execute(&state.pool).await;
 
             last_error = Some((StatusCode::from_u16(resp_status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY), err_msg));
@@ -374,6 +396,8 @@ pub async fn proxy_handler(
             project_id: api_key_record.project_id,
             api_key_id: api_key_record.id,
             credit_price: org.credit_price,
+            billing_mode: org.billing_mode.clone(),
+            standard_price,
             provider: model_config.name.clone(),
             model: model_name.clone(),
             path: path.clone(),
@@ -417,9 +441,23 @@ async fn deduct_credits(
     log_id: Uuid,
     model_name: Option<&str>,
     credit_price: rust_decimal::Decimal,
+    billing_mode: String,
+    standard_price: Option<crate::db::StandardModelPrice>,
     protocol: Protocol,
     usage: &TokenUsage,
 ) {
+    if billing_mode == "standard_pricing" {
+        let Some(price) = standard_price.as_ref() else {
+            tracing::error!("Standard pricing request {log_id} has no price snapshot");
+            return;
+        };
+        let charge = calculate_standard_charge(protocol, usage, price);
+        if let Err(e) = crate::db::apply_standard_charge(pool, org_id, log_id, &charge).await {
+            tracing::error!("Failed to apply standard charge for log {log_id}: {e}");
+        }
+        return;
+    }
+
     // 按模型名称精确匹配，未匹配时自动回退到 default 行
     let rate = crate::db::find_model_credit_rate(pool, model_name.unwrap_or("default")).await;
 
@@ -479,6 +517,73 @@ async fn deduct_credits(
             .bind(true)
             .execute(pool)
             .await;
+    }
+}
+
+fn token_amount(tokens: u64, price_per_million: Decimal) -> Decimal {
+    Decimal::from(tokens) * price_per_million / Decimal::from(1_000_000u64)
+}
+
+/// 标准价格全部使用 Decimal 计算。NULL 缓存价格表示并入普通输入，0 表示免费。
+fn calculate_standard_charge(
+    protocol: Protocol,
+    usage: &TokenUsage,
+    price: &crate::db::StandardModelPrice,
+) -> crate::db::StandardChargeSnapshot {
+    let prompt = usage.prompt_tokens.unwrap_or(0).max(0) as u64;
+    let completion = usage.completion_tokens.unwrap_or(0).max(0) as u64;
+    let mut cached = usage.cached_tokens.unwrap_or(0).max(0) as u64;
+    let mut cache_write = usage.cache_write_tokens.unwrap_or(0).max(0) as u64;
+    let threshold_input = if protocol == Protocol::Anthropic {
+        prompt.saturating_add(cached).saturating_add(cache_write)
+    } else {
+        prompt
+    };
+    let is_long_context = price
+        .long_context_threshold
+        .filter(|v| *v > 0)
+        .is_some_and(|v| threshold_input >= v as u64)
+        && price.long_input_price.is_some();
+
+    let input_price = if is_long_context { price.long_input_price.unwrap_or(price.input_price) } else { price.input_price };
+    let output_price = if is_long_context { price.long_output_price.unwrap_or(price.output_price) } else { price.output_price };
+    let cached_price = if is_long_context { price.long_cached_price.or(price.cached_input_price) } else { price.cached_input_price };
+    let cache_write_price = if is_long_context { price.long_cache_write_price.or(price.cache_write_price) } else { price.cache_write_price };
+
+    let mut official_cost = Decimal::ZERO;
+    if matches!(protocol, Protocol::OpenAI | Protocol::Gemini) {
+        cached = cached.min(prompt);
+        cache_write = cache_write.min(prompt.saturating_sub(cached));
+        let ordinary = prompt
+            .saturating_sub(if cached_price.is_some() { cached } else { 0 })
+            .saturating_sub(if cache_write_price.is_some() { cache_write } else { 0 });
+        official_cost += token_amount(ordinary, input_price);
+        if let Some(p) = cached_price { official_cost += token_amount(cached, p); }
+        if let Some(p) = cache_write_price { official_cost += token_amount(cache_write, p); }
+    } else {
+        official_cost += token_amount(prompt, input_price);
+        official_cost += token_amount(cached, cached_price.unwrap_or(input_price));
+        official_cost += token_amount(cache_write, cache_write_price.unwrap_or(input_price));
+    }
+    official_cost += token_amount(completion, output_price);
+
+    let official_cost = official_cost.round_dp_with_strategy(12, RoundingStrategy::MidpointNearestEven);
+    let exchange_rate = if price.currency == "CNY" { Decimal::ONE } else { price.exchange_rate };
+    let official_cost_cny = (official_cost * exchange_rate).round_dp_with_strategy(12, RoundingStrategy::MidpointNearestEven);
+    let money_cost = (official_cost_cny * price.multiplier).round_dp_with_strategy(12, RoundingStrategy::MidpointNearestEven);
+    let credit_cost = (money_cost * Decimal::from(100u32)).round_dp_with_strategy(6, RoundingStrategy::MidpointNearestEven);
+
+    crate::db::StandardChargeSnapshot {
+        billing_mode: "standard_pricing",
+        price_version_id: price.price_version_id,
+        official_cost,
+        official_currency: price.currency.clone(),
+        exchange_rate,
+        official_cost_cny,
+        price_multiplier: price.multiplier,
+        money_cost,
+        credit_cost,
+        is_long_context,
     }
 }
 
@@ -598,8 +703,8 @@ async fn handle_normal_response(
             "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, \
              request_body, response_status, status, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens, \
              total_tokens, duration_ms, error_message, response_body, \
-             compressed, compression_mode, original_prompt_chars, forwarded_prompt_chars, est_tokens_saved, updated_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25, now())"
+             compressed, compression_mode, original_prompt_chars, forwarded_prompt_chars, est_tokens_saved, billing_mode, updated_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26, now())"
         )
         .bind(log_id).bind(meta.org_id).bind(meta.project_id).bind(meta.api_key_id)
         .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
@@ -610,6 +715,7 @@ async fn handle_normal_response(
         .bind(duration_ms).bind(error_msg.clone()).bind(resp_json.clone())
         .bind(meta.compressed).bind(meta.compression_mode.as_deref())
         .bind(meta.original_prompt_chars).bind(meta.forwarded_prompt_chars).bind(meta.est_tokens_saved)
+        .bind(&meta.billing_mode)
         .execute(&pool)
         .await;
 
@@ -626,6 +732,8 @@ async fn handle_normal_response(
                 log_id,
                 meta.model.as_deref(),
                 meta.credit_price,
+                meta.billing_mode,
+                meta.standard_price,
                 protocol,
                 &usage,
             )
@@ -741,13 +849,14 @@ async fn handle_streaming_response(
                 let duration_ms = start.elapsed().as_millis() as i32;
                 let _ = sqlx::query(
                     "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, \
-                     request_body, response_status, status, duration_ms, error_message, updated_at) \
-                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'error',$12,'Stream interrupted',$13)"
+                     request_body, response_status, status, duration_ms, error_message, billing_mode, updated_at) \
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'error',$12,'Stream interrupted',$13,$14)"
                 )
                 .bind(log_id).bind(meta.org_id).bind(meta.project_id).bind(meta.api_key_id)
                 .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
                 .bind(meta.is_stream).bind(meta.request_body.as_ref())
-                .bind(status_code as i32).bind(duration_ms).bind(chrono::Utc::now())
+                .bind(status_code as i32).bind(duration_ms).bind(&meta.billing_mode)
+                .bind(chrono::Utc::now())
                 .execute(&pool_clone)
                 .await;
                 return;
@@ -793,8 +902,8 @@ async fn handle_streaming_response(
             "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, \
              request_body, response_status, status, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens, \
              total_tokens, duration_ms, error_message, response_body, \
-             compressed, compression_mode, original_prompt_chars, forwarded_prompt_chars, est_tokens_saved, updated_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25, now())"
+             compressed, compression_mode, original_prompt_chars, forwarded_prompt_chars, est_tokens_saved, billing_mode, updated_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26, now())"
         )
         .bind(log_id).bind(meta.org_id).bind(meta.project_id).bind(meta.api_key_id)
         .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
@@ -805,6 +914,7 @@ async fn handle_streaming_response(
         .bind(duration_ms).bind(error_msg).bind(resp_json.clone())
         .bind(meta.compressed).bind(meta.compression_mode.as_deref())
         .bind(meta.original_prompt_chars).bind(meta.forwarded_prompt_chars).bind(meta.est_tokens_saved)
+        .bind(&meta.billing_mode)
         .execute(&pool_clone)
         .await;
 
@@ -821,6 +931,8 @@ async fn handle_streaming_response(
                 log_id,
                 meta.model.as_deref(),
                 meta.credit_price,
+                meta.billing_mode,
+                meta.standard_price,
                 proto,
                 &usage,
             )
@@ -924,6 +1036,34 @@ async fn recover_responses_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn decimal(value: &str) -> Decimal {
+        Decimal::from_str_exact(value).unwrap()
+    }
+
+    fn standard_price() -> crate::db::StandardModelPrice {
+        crate::db::StandardModelPrice {
+            pricing_id: Uuid::new_v4(),
+            price_version_id: Uuid::new_v4(),
+            provider: String::new(),
+            model_name: "test-model".to_string(),
+            version: 1,
+            currency: "CNY".to_string(),
+            region_type: "domestic".to_string(),
+            input_price: decimal("10"),
+            cached_input_price: Some(decimal("2")),
+            cache_write_price: Some(decimal("15")),
+            output_price: decimal("30"),
+            long_context_threshold: None,
+            long_input_price: None,
+            long_cached_price: None,
+            long_cache_write_price: None,
+            long_output_price: None,
+            multiplier: decimal("1.3"),
+            exchange_rate: Decimal::ONE,
+            effective_at: Utc::now(),
+        }
+    }
 
     fn headers_with(name: &str, val: &str) -> http::HeaderMap {
         let mut h = http::HeaderMap::new();
@@ -1110,5 +1250,40 @@ mod tests {
             Some(30.0),
         );
         assert_eq!(cost, 0.0);
+    }
+
+    #[test]
+    fn standard_pricing_converts_sales_amount_to_credits() {
+        let usage = TokenUsage {
+            prompt_tokens: Some(100_000),
+            completion_tokens: Some(10_000),
+            cached_tokens: Some(20_000),
+            cache_write_tokens: Some(10_000),
+            total_tokens: Some(110_000),
+        };
+        let charge = calculate_standard_charge(Protocol::OpenAI, &usage, &standard_price());
+
+        assert_eq!(charge.official_cost, decimal("1.19"));
+        assert_eq!(charge.money_cost, decimal("1.547"));
+        assert_eq!(charge.credit_cost, decimal("154.7"));
+    }
+
+    #[test]
+    fn missing_cache_prices_bill_cache_as_regular_input() {
+        let usage = TokenUsage {
+            prompt_tokens: Some(100_000),
+            completion_tokens: Some(0),
+            cached_tokens: Some(20_000),
+            cache_write_tokens: Some(10_000),
+            total_tokens: Some(100_000),
+        };
+        let mut price = standard_price();
+        price.cached_input_price = None;
+        price.cache_write_price = None;
+        let charge = calculate_standard_charge(Protocol::OpenAI, &usage, &price);
+
+        assert_eq!(charge.official_cost, decimal("1"));
+        assert_eq!(charge.money_cost, decimal("1.3"));
+        assert_eq!(charge.credit_cost, decimal("130"));
     }
 }

@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
+use rust_decimal::Decimal;
 
 use crate::auth::AuthAdmin;
 use crate::state::AppState;
@@ -43,7 +44,7 @@ pub(super) struct StatsOverview {
     cache_write_tokens: i64,
     total_tokens: i64,
     avg_duration_ms: f64,
-    total_credit_cost: f64,
+    total_credit_cost: Decimal,
     compressed_requests: i64,
     est_tokens_saved: i64,
 }
@@ -58,7 +59,7 @@ pub(super) struct OrgStats {
     cached_tokens: i64,
     cache_write_tokens: i64,
     total_tokens: i64,
-    total_credit_cost: f64,
+    total_credit_cost: Decimal,
     error_count: i64,
 }
 
@@ -73,7 +74,7 @@ pub(super) struct ProjectStats {
     cached_tokens: i64,
     cache_write_tokens: i64,
     total_tokens: i64,
-    total_credit_cost: f64,
+    total_credit_cost: Decimal,
     error_count: i64,
 }
 
@@ -87,7 +88,7 @@ pub(super) struct ModelStats {
     cache_write_tokens: i64,
     total_tokens: i64,
     avg_duration_ms: f64,
-    total_credit_cost: f64,
+    total_credit_cost: Decimal,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -100,7 +101,7 @@ pub(super) struct DailyStats {
     cache_write_tokens: i64,
     total_tokens: i64,
     error_count: i64,
-    credit_cost: f64,
+    credit_cost: Decimal,
 }
 
 /// GET /api/stats — 统计数据（支持组织/Key/模型筛选）
@@ -171,7 +172,7 @@ pub(super) async fn get_stats(
             COALESCE(SUM(cache_write_tokens), 0)::BIGINT AS cache_write_tokens, \
             COALESCE(SUM(COALESCE(total_tokens, COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0))), 0)::BIGINT AS total_tokens, \
             COALESCE(AVG(duration_ms)::FLOAT8, 0) AS avg_duration_ms, \
-            COALESCE(SUM(credit_cost)::FLOAT8, 0) AS total_credit_cost, \
+            COALESCE(SUM(credit_cost), 0) AS total_credit_cost, \
             COUNT(*) FILTER (WHERE compressed)::BIGINT AS compressed_requests, \
             COALESCE(SUM(est_tokens_saved), 0)::BIGINT AS est_tokens_saved \
          FROM request_logs WHERE created_at >= $1 {extra_where}"
@@ -193,7 +194,7 @@ pub(super) async fn get_stats(
             COALESCE(SUM(r.cached_tokens), 0)::BIGINT AS cached_tokens, \
             COALESCE(SUM(r.cache_write_tokens), 0)::BIGINT AS cache_write_tokens, \
             COALESCE(SUM(COALESCE(r.total_tokens, COALESCE(r.prompt_tokens, 0) + COALESCE(r.completion_tokens, 0))), 0)::BIGINT AS total_tokens, \
-            COALESCE(SUM(r.credit_cost)::FLOAT8, 0) AS total_credit_cost, \
+            COALESCE(SUM(r.credit_cost), 0) AS total_credit_cost, \
             COUNT(*) FILTER (WHERE r.status = 'error')::BIGINT AS error_count \
          FROM request_logs r LEFT JOIN organizations o ON r.org_id = o.id \
          WHERE r.created_at >= $1 {org_extra} \
@@ -217,7 +218,7 @@ pub(super) async fn get_stats(
             COALESCE(SUM(r.cached_tokens), 0)::BIGINT AS cached_tokens, \
             COALESCE(SUM(r.cache_write_tokens), 0)::BIGINT AS cache_write_tokens, \
             COALESCE(SUM(COALESCE(r.total_tokens, COALESCE(r.prompt_tokens, 0) + COALESCE(r.completion_tokens, 0))), 0)::BIGINT AS total_tokens, \
-            COALESCE(SUM(r.credit_cost)::FLOAT8, 0) AS total_credit_cost, \
+            COALESCE(SUM(r.credit_cost), 0) AS total_credit_cost, \
             COUNT(*) FILTER (WHERE r.status = 'error')::BIGINT AS error_count \
          FROM request_logs r \
          LEFT JOIN projects p ON r.project_id = p.id \
@@ -239,7 +240,7 @@ pub(super) async fn get_stats(
             COALESCE(SUM(cache_write_tokens), 0)::BIGINT AS cache_write_tokens, \
             COALESCE(SUM(COALESCE(total_tokens, COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0))), 0)::BIGINT AS total_tokens, \
             COALESCE(AVG(duration_ms)::FLOAT8, 0) AS avg_duration_ms, \
-            COALESCE(SUM(credit_cost)::FLOAT8, 0) AS total_credit_cost \
+            COALESCE(SUM(credit_cost), 0) AS total_credit_cost \
          FROM request_logs WHERE created_at >= $1 {extra_where} \
          GROUP BY model ORDER BY request_count DESC"
     );
@@ -257,7 +258,7 @@ pub(super) async fn get_stats(
             COALESCE(SUM(cache_write_tokens), 0)::BIGINT AS cache_write_tokens, \
             COALESCE(SUM(COALESCE(total_tokens, COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0))), 0)::BIGINT AS total_tokens, \
             COUNT(*) FILTER (WHERE status = 'error')::BIGINT AS error_count, \
-            COALESCE(SUM(credit_cost)::FLOAT8, 0) AS credit_cost \
+            COALESCE(SUM(credit_cost), 0) AS credit_cost \
          FROM request_logs WHERE created_at >= $1 {extra_where} \
          GROUP BY date ORDER BY date"
     );

@@ -13,7 +13,10 @@ use super::{err, CreditLogSummary, ErrorResponse, OrgRow};
 
 #[derive(Deserialize)]
 pub(super) struct RechargeRequest {
-    amount: rust_decimal::Decimal,
+    /// 兼容协议计费和旧客户端：直接填写积分。
+    amount: Option<rust_decimal::Decimal>,
+    /// 标准价格计费推荐按人民币充值，系统固定换算为 100 积分/元。
+    amount_yuan: Option<rust_decimal::Decimal>,
     note: Option<String>,
 }
 
@@ -39,7 +42,19 @@ pub(super) async fn recharge_credit(
     Path(id): Path<Uuid>,
     Json(body): Json<RechargeRequest>,
 ) -> Result<Json<OrgRow>, (StatusCode, Json<ErrorResponse>)> {
-    if body.amount.is_zero() {
+    let billing_mode: String = sqlx::query_scalar("SELECT billing_mode FROM organizations WHERE id = $1")
+        .bind(id).fetch_optional(&state.pool).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Organization not found"))?;
+    let amount = if billing_mode == "standard_pricing" {
+        body.amount_yuan
+            .map(|yuan| (yuan * rust_decimal::Decimal::from(100u32)).round_dp(6))
+            .or(body.amount)
+    } else {
+        body.amount
+    }
+    .ok_or_else(|| err(StatusCode::BAD_REQUEST, "充值金额不能为空"))?;
+    if amount.is_zero() {
         return Err(err(StatusCode::BAD_REQUEST, "Amount cannot be zero"));
     }
 
@@ -47,11 +62,11 @@ pub(super) async fn recharge_credit(
 
     let row = sqlx::query_as::<_, OrgRow>(
         "UPDATE organizations SET credit = credit + $1, updated_at = now() WHERE id = $2 \
-         RETURNING id, name, slug, credit, overdraft_limit, credit_price, is_active, \
+         RETURNING id, name, slug, credit, overdraft_limit, credit_price, billing_mode, is_active, \
                    COALESCE((SELECT ABS(SUM(amount)) FROM credit_logs WHERE org_id = id AND transaction_type = 'consume'), 0) AS total_consumed, \
                    created_at, updated_at"
     )
-    .bind(body.amount)
+    .bind(amount)
     .bind(id)
     .fetch_optional(&mut *tx)
     .await
@@ -65,7 +80,7 @@ pub(super) async fn recharge_credit(
          VALUES ($1, $2, $3, 'recharge', $4)"
     )
     .bind(id)
-    .bind(body.amount)
+    .bind(amount)
     .bind(row.credit)
     .bind(ref_id)
     .execute(&mut *tx)

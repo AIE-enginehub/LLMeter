@@ -327,9 +327,25 @@
                 </template>
 
                 <template x-if="selectedOrg">
-                  <div class="space-y-6 anim-fade-in-up">
+                  <div class="anim-fade-in-up">
+                    <!-- 组织详情子标签导航 -->
+                    <div class="flex gap-1 mb-6 bg-slate-100 rounded-lg p-1 max-w-2xl">
+                      <button @click="orgSubTab = 'info'"
+                        :class="orgSubTab === 'info' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+                        class="flex-1 px-4 py-2 text-sm font-medium rounded-md transition"
+                        x-text="t('org_info')"></button>
+                      <button @click="orgSubTab = 'projects'"
+                        :class="orgSubTab === 'projects' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+                        class="flex-1 px-4 py-2 text-sm font-medium rounded-md transition"
+                        x-text="t('project_management')"></button>
+                      <button @click="orgSubTab = 'models'"
+                        :class="orgSubTab === 'models' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+                        class="flex-1 px-4 py-2 text-sm font-medium rounded-md transition"
+                        x-text="t('model_config')"></button>
+                    </div>
+
                     <!-- 组织信息 -->
-                    <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm">
+                    <div x-show="orgSubTab === 'info'" x-transition class="bg-white border border-slate-200/60 rounded-xl shadow-sm">
                       <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
                         <h3 class="text-sm font-semibold text-slate-700" x-text="t('org_info')"></h3>
                         <div class="flex gap-2">
@@ -339,7 +355,7 @@
                       </div>
                       <div class="p-5 space-y-5">
                         <!-- 基本信息：名称 / 标识 / 状态 -->
-                        <div class="grid grid-cols-3 gap-4">
+                        <div class="grid grid-cols-2 xl:grid-cols-4 gap-4">
                           <div>
                             <label class="block text-xs text-slate-400 mb-1" x-text="t('name')"></label>
                             <input x-model="editOrg.name" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
@@ -353,6 +369,13 @@
                             <select x-model="editOrg.is_active" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
                               <option value="true" x-text="t('enable')"></option>
                               <option value="false" x-text="t('disable')"></option>
+                            </select>
+                          </div>
+                          <div>
+                            <label class="block text-xs text-slate-400 mb-1" x-text="t('billing_mode')"></label>
+                            <select x-model="editOrg.billing_mode" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                              <option value="standard_pricing" x-text="t('billing_mode_standard')"></option>
+                              <option value="contract_ratio" x-text="t('billing_mode_contract')"></option>
                             </select>
                           </div>
                         </div>
@@ -370,9 +393,13 @@
                             <label class="block text-xs text-slate-400 mb-1.5" x-text="t('overdraft_limit')"></label>
                             <input type="number" step="1" min="0" x-model="editOrg.overdraft_limit" class="w-full px-2 py-1 bg-white border border-slate-200 rounded text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
                           </div>
-                          <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                          <div x-show="editOrg.billing_mode === 'contract_ratio'" class="bg-slate-50 rounded-lg p-3 border border-slate-100">
                             <label class="block text-xs text-slate-400 mb-1.5" x-text="t('credit_price')"></label>
                             <input type="number" step="0.0001" min="0" x-model="editOrg.credit_price" class="w-full px-2 py-1 bg-white border border-slate-200 rounded text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                          </div>
+                          <div x-show="editOrg.billing_mode === 'standard_pricing'" class="bg-blue-50/60 rounded-lg p-3 border border-blue-100">
+                            <label class="block text-xs text-blue-500 mb-1.5" x-text="t('credit_exchange_rate')"></label>
+                            <span class="text-sm font-semibold text-blue-700">100 Credit = ¥1</span>
                           </div>
                         </div>
                         <!-- 操作按钮 -->
@@ -384,7 +411,7 @@
                     </div>
 
                     <!-- 项目与 API Key 管理 -->
-                    <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm">
+                    <div x-show="orgSubTab === 'projects'" x-transition class="bg-white border border-slate-200/60 rounded-xl shadow-sm">
                       <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
                         <h3 class="text-sm font-semibold text-slate-700" x-text="t('project_management')"></h3>
                         <button @click="showCreateProject = true" class="text-xs px-2.5 py-1 bg-slate-800 text-white rounded-md hover:bg-slate-700 transition" x-text="t('create_project')"></button>
@@ -450,7 +477,7 @@
                     </div>
 
                     <!-- 模型配置管理 -->
-                    <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm">
+                    <div x-show="orgSubTab === 'models'" x-transition class="bg-white border border-slate-200/60 rounded-xl shadow-sm">
                       <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
                         <h3 class="text-sm font-semibold text-slate-700" x-text="t('model_config')"></h3>
                         <button @click="openModelForm()" class="text-xs px-2.5 py-1 bg-slate-800 text-white rounded-md hover:bg-slate-700 transition" x-text="t('add_config')"></button>
@@ -498,6 +525,13 @@
                   <div>
                     <label class="block text-xs text-slate-500 mb-1" x-text="t('slug')"></label>
                     <input x-model="newOrg.slug" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" :placeholder="t('slug_ph')">
+                  </div>
+                  <div>
+                    <label class="block text-xs text-slate-500 mb-1" x-text="t('billing_mode')"></label>
+                    <select x-model="newOrg.billing_mode" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition">
+                      <option value="standard_pricing" x-text="t('billing_mode_standard')"></option>
+                      <option value="contract_ratio" x-text="t('billing_mode_contract')"></option>
+                    </select>
                   </div>
                 </div>
                 <div class="flex justify-end gap-2 mt-5">
@@ -675,8 +709,9 @@
                 <h3 class="text-base font-semibold text-slate-800 mb-4" x-text="t('recharge_credit')"></h3>
                 <div class="space-y-3">
                   <div>
-                    <label class="block text-xs text-slate-500 mb-1" x-text="t('recharge_amount')"></label>
+                    <label class="block text-xs text-slate-500 mb-1" x-text="t(editOrg.billing_mode === 'standard_pricing' ? 'recharge_amount_yuan' : 'recharge_amount')"></label>
                     <input x-model.number="rechargeAmount" type="number" step="0.0001" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 transition" :placeholder="t('recharge_placeholder')">
+                    <p x-show="editOrg.billing_mode === 'standard_pricing' && rechargeAmount" class="text-xs text-blue-600 mt-1.5" x-text="t('recharge_credit_preview', Number(rechargeAmount) * 100)"></p>
                   </div>
                   <div>
                     <label class="block text-xs text-slate-500 mb-1" x-text="t('note')"></label>
@@ -844,12 +879,12 @@
                           <div class="text-[10px] text-slate-400 mt-0.5"><span x-text="t('in')"></span><span x-text="fmtToken(log.prompt_tokens)"></span> · <span x-text="t('out')"></span><span x-text="fmtToken(log.completion_tokens)"></span> · <span x-text="t('cache')"></span><span x-text="fmtToken(log.cached_tokens)"></span> · <span x-text="t('cache_write_token') + ': '"></span><span x-text="fmtToken(log.cache_write_tokens)"></span></div>
                         </td>
                         <td class="px-3 py-2.5 text-right text-xs font-medium">
-                          <span class="text-indigo-600" x-text="log.credit_cost ? Number(log.credit_cost).toFixed(2) : '-'"></span>
+                          <span class="text-indigo-600" x-text="fmtCredit(log.credit_cost)"></span>
                           <span x-show="log.is_long_context" class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-100 text-orange-700" x-text="t('long_ctx_tag')"></span>
                           <span x-show="log.compressed" :title="'~' + (log.est_tokens_saved||0) + ' tokens'" class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-100 text-teal-700" x-text="t('compressed_tag')"></span>
                         </td>
                         <td class="px-3 py-2.5 text-right text-xs font-medium">
-                          <span class="text-emerald-600" x-text="log.money_cost != null ? '¥' + Number(log.money_cost).toFixed(2) : '-'"></span>
+                          <span class="text-emerald-600" x-text="fmtLogMoney(log.money_cost)"></span>
                         </td>
                           <td class="px-3 py-2.5 text-right text-xs text-slate-500" x-text="log.duration_ms != null ? log.duration_ms + 'ms' : '-'"></td>
                         </tr>
@@ -910,14 +945,18 @@
                       <div class="bg-slate-50 rounded-lg px-3 py-2">
                         <p class="text-xs text-slate-400" x-text="t('consume_credit')"></p>
                         <div class="flex items-center gap-1.5 mt-0.5">
-                          <p class="text-sm text-indigo-600 font-medium" x-text="logDetail.credit_cost ? Number(logDetail.credit_cost).toFixed(2) : '-'"></p>
+                          <p class="text-sm text-indigo-600 font-medium" x-text="fmtCredit(logDetail.credit_cost)"></p>
                           <span x-show="logDetail.is_long_context" class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-100 text-orange-700" x-text="t('long_ctx_tag')"></span>
                         </div>
                       </div>
                       <div class="bg-slate-50 rounded-lg px-3 py-2">
                         <p class="text-xs text-slate-400" x-text="t('money_cost')"></p>
-                        <p class="text-sm text-emerald-600 font-medium" x-text="logDetail.money_cost != null ? '¥' + Number(logDetail.money_cost).toFixed(2) : '-'"></p>
+                        <p class="text-sm text-emerald-600 font-medium" x-text="fmtLogMoney(logDetail.money_cost)"></p>
                       </div>
+                      <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('billing_mode')"></p><p class="text-sm text-slate-700" x-text="t(logDetail.billing_mode === 'standard_pricing' ? 'billing_mode_standard' : 'billing_mode_contract')"></p></div>
+                      <div x-show="logDetail.billing_mode === 'standard_pricing'" class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('official_cost')"></p><p class="text-sm text-slate-700 font-medium" x-text="logDetail.official_cost != null ? (logDetail.official_currency || '') + ' ' + Number(logDetail.official_cost).toFixed(6) : '-'"></p></div>
+                      <div x-show="logDetail.billing_mode === 'standard_pricing'" class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('exchange_rate')"></p><p class="text-sm text-slate-700" x-text="logDetail.exchange_rate ?? '-'"></p></div>
+                      <div x-show="logDetail.billing_mode === 'standard_pricing'" class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('multiplier')"></p><p class="text-sm text-slate-700" x-text="logDetail.price_multiplier ?? '-'"></p></div>
                       <div class="bg-slate-50 rounded-lg px-3 py-2"><p class="text-xs text-slate-400" x-text="t('time')"></p><p class="text-sm text-slate-700" x-text="fmtTime(logDetail.created_at)"></p></div>
                     </div>
                     <template x-if="logDetail.error_message">
@@ -1358,11 +1397,105 @@
 
           <!-- 子标签导航 -->
           <div class="flex gap-1 mb-6 bg-slate-100 rounded-lg p-1 max-w-2xl">
-            <template x-for="st in ['model_rates','mail','compression','password']" :key="st">
+            <template x-for="st in ['model_prices','model_rates','mail','compression','password']" :key="st">
               <button @click="subTab = st"
                 :class="subTab === st ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
                 class="flex-1 px-4 py-2 text-sm font-medium rounded-md transition"
                 x-text="t('settings_tab_' + st)"></button>
+            </template>
+          </div>
+
+          <!-- ── 子标签：标准模型价格 ── -->
+          <div x-show="subTab === 'model_prices'" x-transition class="space-y-6 max-w-5xl">
+            <div class="bg-white border border-slate-200/60 rounded-xl shadow-sm p-6">
+              <div class="flex items-start justify-between mb-5">
+                <div>
+                  <h3 class="text-base font-semibold text-slate-800" x-text="t('model_pricing_title')"></h3>
+                  <p class="text-xs text-slate-500 mt-1" x-text="t('model_pricing_desc')"></p>
+                </div>
+                <button @click="openAddPricing()" class="px-3 py-1.5 text-xs bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition" x-text="t('add_model_pricing')"></button>
+              </div>
+
+              <div x-show="modelPricings.length === 0" class="text-center py-10 text-sm text-slate-400" x-text="t('no_model_pricing')"></div>
+              <div x-show="modelPricings.length > 0" class="overflow-x-auto border border-slate-100 rounded-lg">
+                <table class="w-full text-sm">
+                  <thead><tr class="text-xs text-slate-400 bg-slate-50 border-b border-slate-100">
+                    <th class="text-left px-4 py-2.5 font-medium" x-text="t('model')"></th>
+                    <th class="text-right px-4 py-2.5 font-medium" x-text="t('input_price_short')"></th>
+                    <th class="text-right px-4 py-2.5 font-medium" x-text="t('output_price_short')"></th>
+                    <th class="text-right px-4 py-2.5 font-medium" x-text="t('cache_read_price_short')"></th>
+                    <th class="text-right px-4 py-2.5 font-medium" x-text="t('cache_write_price_short')"></th>
+                    <th class="text-right px-4 py-2.5 font-medium" x-text="t('multiplier')"></th>
+                    <th class="text-right px-4 py-2.5 font-medium" x-text="t('action')"></th>
+                  </tr></thead>
+                  <tbody>
+                    <template x-for="p in modelPricings" :key="p.pricing_id">
+                      <tr class="border-b border-slate-50 hover:bg-blue-50/40 transition">
+                        <td class="px-4 py-3">
+                          <div class="font-medium text-slate-700" x-text="p.model_name"></div>
+                          <div class="text-[11px] text-slate-400 mt-0.5"><span x-text="p.provider || t('all_providers')"></span><span class="mx-1">·</span><span x-text="'v' + p.version"></span><span class="mx-1">·</span><span x-text="fmtTime(p.effective_at)"></span></div>
+                        </td>
+                        <td class="px-4 py-3 text-right font-mono text-xs" x-text="fmtPricingMoney(p.input_price, p.currency)"></td>
+                        <td class="px-4 py-3 text-right font-mono text-xs" x-text="fmtPricingMoney(p.output_price, p.currency)"></td>
+                        <td class="px-4 py-3 text-right font-mono text-xs" x-text="fmtPricingMoney(p.cached_input_price, p.currency)"></td>
+                        <td class="px-4 py-3 text-right font-mono text-xs" x-text="fmtPricingMoney(p.cache_write_price, p.currency)"></td>
+                        <td class="px-4 py-3 text-right font-mono text-xs" x-text="fmtPricingNumber(p.multiplier)"></td>
+                        <td class="px-4 py-3 text-right whitespace-nowrap"><button @click="openEditPricing(p)" class="text-xs text-slate-500 hover:text-slate-800 mr-3" x-text="t('edit')"></button><button @click="deletePricing(p.pricing_id)" class="text-xs text-red-400 hover:text-red-600" x-text="t('delete')"></button></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <template x-teleport="body">
+              <template x-if="editingPricing">
+                <div class="fixed inset-0 z-[9999] flex items-center justify-center p-4" @click.self="editingPricing = null">
+                  <div class="absolute inset-0 bg-slate-900/30 backdrop-blur-sm"></div>
+                  <div class="relative bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+                    <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white z-10">
+                      <h3 class="text-base font-semibold text-slate-800" x-text="editingPricing.pricing_id ? t('edit_model_pricing') : t('add_model_pricing')"></h3>
+                      <button @click="editingPricing = null" class="text-slate-400 hover:text-slate-600 text-xl">×</button>
+                    </div>
+                    <div class="p-6 space-y-5">
+                      <div class="grid grid-cols-2 gap-4">
+                        <div><label class="block text-xs text-slate-500 mb-1" x-text="t('model_name')"></label><input x-model="editingPricing.model_name" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"></div>
+                        <div><label class="block text-xs text-slate-500 mb-1" x-text="t('pricing_provider')"></label><input x-model="editingPricing.provider" :placeholder="t('pricing_provider_ph')" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"></div>
+                        <div><label class="block text-xs text-slate-500 mb-1" x-text="t('currency')"></label><select x-model="editingPricing.currency" @change="onPricingCurrencyChange()" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"><option value="CNY">CNY</option><option value="USD">USD</option></select></div>
+                        <div><label class="block text-xs text-slate-500 mb-1" x-text="t('effective_at')"></label><input type="datetime-local" x-model="editingPricing.effective_at" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"></div>
+                      </div>
+                      <div>
+                        <h4 class="text-sm font-medium text-slate-700 mb-3" x-text="t('normal_token_prices')"></h4>
+                        <div class="grid grid-cols-4 gap-3">
+                          <div><label class="block text-xs text-slate-400 mb-1" x-text="t('input_price')"></label><input type="number" min="0" step="0.000001" x-model="editingPricing.input_price" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"></div>
+                          <div><label class="block text-xs text-slate-400 mb-1" x-text="t('output_price')"></label><input type="number" min="0" step="0.000001" x-model="editingPricing.output_price" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"></div>
+                          <div><label class="block text-xs text-slate-400 mb-1" x-text="t('cached_input_price')"></label><input type="number" min="0" step="0.000001" x-model="editingPricing.cached_input_price" :placeholder="t('pricing_null_hint')" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"></div>
+                          <div><label class="block text-xs text-slate-400 mb-1" x-text="t('cache_write_price')"></label><input type="number" min="0" step="0.000001" x-model="editingPricing.cache_write_price" :placeholder="t('pricing_null_hint')" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"></div>
+                        </div>
+                        <p class="text-[11px] text-slate-400 mt-2" x-text="t('price_unit_hint')"></p>
+                      </div>
+                      <div>
+                        <h4 class="text-sm font-medium text-slate-700 mb-3" x-text="t('long_context_prices')"></h4>
+                        <div class="grid grid-cols-5 gap-3">
+                          <div><label class="block text-xs text-slate-400 mb-1" x-text="t('long_context_threshold')"></label><input type="number" min="1" step="1" x-model="editingPricing.long_context_threshold" :placeholder="t('optional')" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"></div>
+                          <div><label class="block text-xs text-slate-400 mb-1" x-text="t('input_price_short')"></label><input type="number" min="0" step="0.000001" x-model="editingPricing.long_input_price" :placeholder="t('optional')" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"></div>
+                          <div><label class="block text-xs text-slate-400 mb-1" x-text="t('output_price_short')"></label><input type="number" min="0" step="0.000001" x-model="editingPricing.long_output_price" :placeholder="t('optional')" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"></div>
+                          <div><label class="block text-xs text-slate-400 mb-1" x-text="t('cache_read_price_short')"></label><input type="number" min="0" step="0.000001" x-model="editingPricing.long_cached_price" :placeholder="t('optional')" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"></div>
+                          <div><label class="block text-xs text-slate-400 mb-1" x-text="t('cache_write_price_short')"></label><input type="number" min="0" step="0.000001" x-model="editingPricing.long_cache_write_price" :placeholder="t('optional')" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"></div>
+                        </div>
+                      </div>
+                      <div class="grid grid-cols-2 gap-4">
+                        <div><label class="block text-xs text-slate-500 mb-1" x-text="t('multiplier')"></label><input type="number" min="0.000001" step="0.01" x-model="editingPricing.multiplier" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"></div>
+                        <div><label class="block text-xs text-slate-500 mb-1" x-text="t('exchange_rate')"></label><input type="number" min="0.000001" step="0.0001" :disabled="editingPricing.currency === 'CNY'" x-model="editingPricing.exchange_rate" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm disabled:text-slate-400"></div>
+                      </div>
+                    </div>
+                    <div class="px-6 py-4 border-t border-slate-100 flex justify-end gap-2 sticky bottom-0 bg-white">
+                      <button @click="editingPricing = null" class="px-4 py-2 text-sm text-slate-500" x-text="t('cancel')"></button>
+                      <button @click="savePricing()" class="px-4 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-700" x-text="t('save')"></button>
+                    </div>
+                  </div>
+                </div>
+              </template>
             </template>
           </div>
 

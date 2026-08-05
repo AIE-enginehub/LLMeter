@@ -21,7 +21,11 @@ use super::{err, friendly_db_err, ErrorResponse, OrgRow, ProjectRow, ApiKeyRow};
 pub(super) struct CreateOrgRequest {
     name: String,
     slug: String,
+    #[serde(default = "default_billing_mode")]
+    billing_mode: String,
 }
+
+fn default_billing_mode() -> String { "standard_pricing".to_string() }
 
 #[derive(Deserialize)]
 pub(super) struct UpdateOrgRequest {
@@ -30,6 +34,7 @@ pub(super) struct UpdateOrgRequest {
     is_active: Option<bool>,
     overdraft_limit: Option<rust_decimal::Decimal>,
     credit_price: Option<rust_decimal::Decimal>,
+    billing_mode: Option<String>,
 }
 
 /// GET /api/orgs — 列出所有组织
@@ -38,7 +43,7 @@ pub(super) async fn list_orgs(
     _admin: AuthAdmin,
 ) -> Result<Json<Vec<OrgRow>>, (StatusCode, Json<ErrorResponse>)> {
     let rows = sqlx::query_as::<_, OrgRow>(
-        "SELECT o.id, o.name, o.slug, o.credit, o.overdraft_limit, o.credit_price, o.is_active, \
+        "SELECT o.id, o.name, o.slug, o.credit, o.overdraft_limit, o.credit_price, o.billing_mode, o.is_active, \
                 COALESCE((SELECT ABS(SUM(amount)) FROM credit_logs WHERE org_id = o.id AND transaction_type = 'consume'), 0) AS total_consumed, \
                 o.created_at, o.updated_at \
          FROM organizations o ORDER BY o.created_at DESC",
@@ -59,11 +64,12 @@ pub(super) async fn create_org(
     let mut tx = state.pool.begin().await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let row = sqlx::query_as::<_, OrgRow>(
-        "INSERT INTO organizations (name, slug) VALUES ($1, $2) \
-         RETURNING id, name, slug, credit, overdraft_limit, credit_price, is_active, 0::NUMERIC AS total_consumed, created_at, updated_at",
+        "INSERT INTO organizations (name, slug, billing_mode) VALUES ($1, $2, $3) \
+         RETURNING id, name, slug, credit, overdraft_limit, credit_price, billing_mode, is_active, 0::NUMERIC AS total_consumed, created_at, updated_at",
     )
     .bind(&body.name)
     .bind(&body.slug)
+    .bind(validate_billing_mode(&body.billing_mode)?)
     .fetch_one(&mut *tx)
     .await
     .map_err(friendly_db_err)?;
@@ -86,6 +92,7 @@ pub(super) async fn update_org(
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateOrgRequest>,
 ) -> Result<Json<OrgRow>, (StatusCode, Json<ErrorResponse>)> {
+    let billing_mode = body.billing_mode.as_deref().map(validate_billing_mode).transpose()?;
     let row = sqlx::query_as::<_, OrgRow>(
         "UPDATE organizations SET \
             name = COALESCE($2, name), \
@@ -93,9 +100,10 @@ pub(super) async fn update_org(
             is_active = COALESCE($4, is_active), \
             overdraft_limit = COALESCE($5, overdraft_limit), \
             credit_price = COALESCE($6, credit_price), \
+            billing_mode = COALESCE($7, billing_mode), \
             updated_at = now() \
          WHERE id = $1 \
-         RETURNING id, name, slug, credit, overdraft_limit, credit_price, is_active, \
+         RETURNING id, name, slug, credit, overdraft_limit, credit_price, billing_mode, is_active, \
                    COALESCE((SELECT ABS(SUM(amount)) FROM credit_logs WHERE org_id = id AND transaction_type = 'consume'), 0) AS total_consumed, \
                    created_at, updated_at",
     )
@@ -105,12 +113,20 @@ pub(super) async fn update_org(
     .bind(body.is_active)
     .bind(body.overdraft_limit)
     .bind(body.credit_price)
+    .bind(billing_mode)
     .fetch_optional(&state.pool)
     .await
     .map_err(friendly_db_err)?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Organization not found"))?;
 
     Ok(Json(row))
+}
+
+fn validate_billing_mode(value: &str) -> Result<&str, (StatusCode, Json<ErrorResponse>)> {
+    match value {
+        "contract_ratio" | "standard_pricing" => Ok(value),
+        _ => Err(err(StatusCode::BAD_REQUEST, "不支持的计费方式")),
+    }
 }
 
 /// DELETE /api/orgs/:id — 删除组织

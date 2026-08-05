@@ -17,6 +17,24 @@ function formatNum(n) {
   return Number(n).toLocaleString(locale);
 }
 
+/** 积分保留最多 6 位小数，小额标准计费不会被显示成 0.00。 */
+function fmtCredit(n) {
+  if (n == null) return '-';
+  const locale = window.lang === 'en' ? 'en-US' : 'zh-CN';
+  return Number(n).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 6 });
+}
+
+/** 调用日志金额保留 4 位；非零极小金额不显示成 0。 */
+function fmtLogMoney(n) {
+  if (n == null) return '-';
+  const value = Number(n);
+  if (!Number.isFinite(value)) return '-';
+  if (value !== 0 && Math.abs(value) < 0.00005) {
+    return value > 0 ? '<¥0.0001' : '-¥<0.0001';
+  }
+  return '¥' + value.toFixed(4);
+}
+
 /** 时间格式化（按当前语言选择 locale） */
 function fmtTime(t) {
   if (!t) return '-';

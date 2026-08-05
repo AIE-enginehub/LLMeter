@@ -88,6 +88,7 @@ struct OrgRow {
     credit: rust_decimal::Decimal,
     overdraft_limit: rust_decimal::Decimal,
     credit_price: rust_decimal::Decimal,
+    billing_mode: String,
     is_active: bool,
     total_consumed: Option<rust_decimal::Decimal>,
     created_at: DateTime<Utc>,
@@ -167,6 +168,13 @@ struct LogRow {
     error_message: Option<String>,
     credit_cost: Option<rust_decimal::Decimal>,
     money_cost: Option<rust_decimal::Decimal>,
+    billing_mode: String,
+    price_version_id: Option<Uuid>,
+    official_cost: Option<rust_decimal::Decimal>,
+    official_currency: Option<String>,
+    exchange_rate: Option<rust_decimal::Decimal>,
+    official_cost_cny: Option<rust_decimal::Decimal>,
+    price_multiplier: Option<rust_decimal::Decimal>,
     is_long_context: bool,
     compressed: bool,
     compression_mode: Option<String>,
@@ -202,6 +210,13 @@ struct LogSummaryRow {
     error_message: Option<String>,
     credit_cost: Option<rust_decimal::Decimal>,
     money_cost: Option<rust_decimal::Decimal>,
+    billing_mode: String,
+    price_version_id: Option<Uuid>,
+    official_cost: Option<rust_decimal::Decimal>,
+    official_currency: Option<String>,
+    exchange_rate: Option<rust_decimal::Decimal>,
+    official_cost_cny: Option<rust_decimal::Decimal>,
+    price_multiplier: Option<rust_decimal::Decimal>,
     is_long_context: bool,
     compressed: bool,
     est_tokens_saved: Option<i32>,
@@ -274,6 +289,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/settings/compression", get(settings_handlers::get_compression).put(settings_handlers::update_compression))
         .route("/api/settings/model_credit_rates", get(settings_handlers::list_model_credit_rates).post(settings_handlers::create_model_credit_rate))
         .route("/api/settings/model_credit_rates/{id}", put(settings_handlers::update_model_credit_rate).delete(settings_handlers::delete_model_credit_rate))
+        .route("/api/settings/model_pricings", get(settings_handlers::list_model_pricings).post(settings_handlers::create_model_pricing))
+        .route("/api/settings/model_pricings/{id}", put(settings_handlers::update_model_pricing).delete(settings_handlers::delete_model_pricing))
         // 用量导出
         .route("/api/usage/export_report", post(billing::export_usage_report))
         // 积分系统
