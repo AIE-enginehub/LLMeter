@@ -33,12 +33,51 @@ struct LogMeta {
     method: String,
     is_stream: bool,
     request_body: Option<Value>,
-    // 压缩元数据（request_body 始终保留原始内容供审计）
+    // 压缩元数据。转发始终使用完整请求；成功且计费完成的日志仅保留请求体前缀。
     compressed: bool,
     compression_mode: Option<String>,
     original_prompt_chars: Option<i32>,
     forwarded_prompt_chars: Option<i32>,
     est_tokens_saved: Option<i32>,
+}
+
+/// 成功且计费完成的请求体最多保留 64 KiB。错误、透传或计费失败的请求仍保存完整正文，
+/// 既控制正常流量产生的 TOAST 数据，也保留异常请求的排障信息。
+const SUCCESS_REQUEST_BODY_PREFIX_BYTES: usize = 64 * 1024;
+
+fn request_body_for_pending_charge(body: Option<&Value>) -> Option<Value> {
+    let body = body?;
+    let serialized = serde_json::to_string(body).ok()?;
+    if serialized.len() <= SUCCESS_REQUEST_BODY_PREFIX_BYTES {
+        return Some(body.clone());
+    }
+
+    let mut retained_bytes = SUCCESS_REQUEST_BODY_PREFIX_BYTES;
+    while retained_bytes > 0 && !serialized.is_char_boundary(retained_bytes) {
+        retained_bytes -= 1;
+    }
+
+    Some(serde_json::json!({
+        "_llmeter_truncated": true,
+        "original_bytes": serialized.len(),
+        "retained_bytes": retained_bytes,
+        "prefix": &serialized[..retained_bytes],
+    }))
+}
+
+async fn restore_full_request_body(
+    pool: &sqlx::PgPool,
+    log_id: Uuid,
+    request_body: Option<&Value>,
+) {
+    let result = sqlx::query("UPDATE request_logs SET request_body = $2, updated_at = now() WHERE id = $1")
+        .bind(log_id)
+        .bind(request_body)
+        .execute(pool)
+        .await;
+    if let Err(error) = result {
+        tracing::error!("Failed to restore full request body for unbilled log {log_id}: {error}");
+    }
 }
 
 #[derive(Clone)]
@@ -196,8 +235,8 @@ pub async fn proxy_handler(
         }
     };
 
-    // 5.5 提示词压缩：在转发上游前压缩请求体中的自然语言文本（仅非透传请求）
-    //     request_body 仍记录原始内容；只有转发给上游的副本被压缩。
+    // 5.5 提示词压缩：在转发上游前压缩请求体中的自然语言文本（仅非透传请求）。
+    //     转发副本与日志副本相互独立，日志截断绝不影响上游请求。
     let header_pref = parse_compress_header(&parts.headers);
     let mut comp_mode_str: Option<String> = None;
     let mut comp_header_val: Option<String> = None;
@@ -445,17 +484,20 @@ async fn deduct_credits(
     standard_price: Option<crate::db::StandardModelPrice>,
     protocol: Protocol,
     usage: &TokenUsage,
-) {
+) -> bool {
     if billing_mode == "standard_pricing" {
         let Some(price) = standard_price.as_ref() else {
             tracing::error!("Standard pricing request {log_id} has no price snapshot");
-            return;
+            return false;
         };
         let charge = calculate_standard_charge(protocol, usage, price);
-        if let Err(e) = crate::db::apply_standard_charge(pool, org_id, log_id, &charge).await {
-            tracing::error!("Failed to apply standard charge for log {log_id}: {e}");
-        }
-        return;
+        return match crate::db::apply_standard_charge(pool, org_id, log_id, &charge).await {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::error!("Failed to apply standard charge for log {log_id}: {e}");
+                false
+            }
+        };
     }
 
     // 按模型名称精确匹配，未匹配时自动回退到 default 行
@@ -501,23 +543,36 @@ async fn deduct_credits(
 
     if cost > 0.0 {
         if let Some(decimal_cost) = rust_decimal::Decimal::from_f64(cost) {
-            let _ = crate::db::deduct_credit(pool, org_id, decimal_cost, &log_id.to_string()).await;
             let money = decimal_cost * credit_price;
-            let _ = sqlx::query("UPDATE request_logs SET credit_cost = $1, money_cost = $3, is_long_context = $4 WHERE id = $2")
-                .bind(decimal_cost)
-                .bind(log_id)
-                .bind(money)
-                .bind(is_long_context)
-                .execute(pool)
-                .await;
+            return match crate::db::apply_contract_charge(
+                pool,
+                org_id,
+                log_id,
+                decimal_cost,
+                money,
+                is_long_context,
+            )
+            .await
+            {
+                Ok(_) => true,
+                Err(error) => {
+                    tracing::error!("Failed to apply contract charge for log {log_id}: {error}");
+                    false
+                }
+            };
         }
     } else if is_long_context {
-        let _ = sqlx::query("UPDATE request_logs SET is_long_context = $2 WHERE id = $1")
+        if let Err(error) = sqlx::query("UPDATE request_logs SET is_long_context = $2 WHERE id = $1")
             .bind(log_id)
             .bind(true)
             .execute(pool)
-            .await;
+            .await
+        {
+            tracing::error!("Failed to save long-context flag for log {log_id}: {error}");
+        }
     }
+
+    false
 }
 
 fn token_amount(tokens: u64, price_per_million: Decimal) -> Decimal {
@@ -698,6 +753,11 @@ async fn handle_normal_response(
         } else {
             None
         };
+        let logged_request_body = if status_str == "success" && !is_passthrough {
+            request_body_for_pending_charge(meta.request_body.as_ref())
+        } else {
+            meta.request_body.clone()
+        };
 
         let insert_res = sqlx::query(
             "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, \
@@ -708,7 +768,7 @@ async fn handle_normal_response(
         )
         .bind(log_id).bind(meta.org_id).bind(meta.project_id).bind(meta.api_key_id)
         .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
-        .bind(meta.is_stream).bind(meta.request_body.as_ref())
+        .bind(meta.is_stream).bind(logged_request_body.as_ref())
         .bind(status_code as i32).bind(status_str)
         .bind(usage.prompt_tokens).bind(usage.completion_tokens)
         .bind(usage.cached_tokens).bind(usage.cache_write_tokens).bind(usage.total_tokens)
@@ -723,10 +783,10 @@ async fn handle_normal_response(
             tracing::error!("Failed to insert request_log: {}", e);
         }
 
-        if is_passthrough { return; }
+        if insert_res.is_err() || is_passthrough { return; }
 
         if status_str == "success" {
-            deduct_credits(
+            let billed = deduct_credits(
                 &pool,
                 org_id,
                 log_id,
@@ -738,6 +798,9 @@ async fn handle_normal_response(
                 &usage,
             )
             .await;
+            if !billed {
+                restore_full_request_body(&pool, log_id, meta.request_body.as_ref()).await;
+            }
         }
     });
 
@@ -897,6 +960,11 @@ async fn handle_streaming_response(
         };
         // PostgreSQL JSONB 不支持 \u0000（null 字节），移除后再存储
         let resp_json = Value::String(body_str.replace('\0', ""));
+        let logged_request_body = if status_str == "success" && !is_passthrough {
+            request_body_for_pending_charge(meta.request_body.as_ref())
+        } else {
+            meta.request_body.clone()
+        };
 
         let insert_res = sqlx::query(
             "INSERT INTO request_logs (id, org_id, project_id, api_key_id, provider, model, path, method, is_stream, \
@@ -907,7 +975,7 @@ async fn handle_streaming_response(
         )
         .bind(log_id).bind(meta.org_id).bind(meta.project_id).bind(meta.api_key_id)
         .bind(&meta.provider).bind(meta.model.as_deref()).bind(&meta.path).bind(&meta.method)
-        .bind(meta.is_stream).bind(meta.request_body.as_ref())
+        .bind(meta.is_stream).bind(logged_request_body.as_ref())
         .bind(status_code as i32).bind(status_str)
         .bind(usage.prompt_tokens).bind(usage.completion_tokens)
         .bind(usage.cached_tokens).bind(usage.cache_write_tokens).bind(usage.total_tokens)
@@ -922,10 +990,10 @@ async fn handle_streaming_response(
             tracing::error!("Failed to insert request_log (stream): {}", e);
         }
 
-        if is_passthrough { return; }
+        if insert_res.is_err() || is_passthrough { return; }
 
         if status_str == "success" {
-            deduct_credits(
+            let billed = deduct_credits(
                 &pool_clone,
                 org_id,
                 log_id,
@@ -937,6 +1005,9 @@ async fn handle_streaming_response(
                 &usage,
             )
             .await;
+            if !billed {
+                restore_full_request_body(&pool_clone, log_id, meta.request_body.as_ref()).await;
+            }
         }
     });
 
@@ -1072,6 +1143,30 @@ mod tests {
             http::HeaderValue::from_str(val).unwrap(),
         );
         h
+    }
+
+    #[test]
+    fn small_success_request_body_remains_structured_json() {
+        let body = serde_json::json!({"model": "test", "input": "hello"});
+        assert_eq!(request_body_for_pending_charge(Some(&body)), Some(body));
+    }
+
+    #[test]
+    fn large_success_request_body_keeps_a_utf8_safe_prefix() {
+        let body = serde_json::json!({
+            "model": "test",
+            "input": "中文内容".repeat(SUCCESS_REQUEST_BODY_PREFIX_BYTES),
+        });
+        let original = serde_json::to_string(&body).unwrap();
+        let logged = request_body_for_pending_charge(Some(&body)).unwrap();
+
+        assert_eq!(logged["_llmeter_truncated"], true);
+        assert_eq!(logged["original_bytes"], original.len());
+        let retained = logged["retained_bytes"].as_u64().unwrap() as usize;
+        let prefix = logged["prefix"].as_str().unwrap();
+        assert!(retained <= SUCCESS_REQUEST_BODY_PREFIX_BYTES);
+        assert_eq!(prefix.len(), retained);
+        assert_eq!(prefix, &original[..retained]);
     }
 
     // ── parse_compress_header ────────────────────────────────────

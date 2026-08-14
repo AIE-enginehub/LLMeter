@@ -133,8 +133,9 @@ deducted from upstream-reported token usage, which reflects the compressed promp
 
 ### Requirement: Observability and transparency
 The system SHALL record, per request, whether compression ran, the mode used, the original
-and forwarded prompt character counts, and the estimated tokens saved; SHALL continue to
-log the original (uncompressed) request body for audit; MAY emit an additive
+and forwarded prompt character counts, and the estimated tokens saved; SHALL derive the
+logged request body from the original (uncompressed) request and MAY retain only its first
+64 KiB after a successful charge; MAY emit an additive
 `X-LLMeter-Compression` response header describing the result; and SHALL expose aggregate
 estimated savings through the admin stats API and UI.
 
@@ -142,7 +143,8 @@ estimated savings through the admin stats API and UI.
 - **WHEN** a request is compressed
 - **THEN** its `request_logs` row has `compressed = true`, a `compression_mode`, populated
   `original_prompt_chars`/`forwarded_prompt_chars`, and a non-negative `est_tokens_saved`
-- **AND** `request_body` still contains the original uncompressed body.
+- **AND** `request_body` contains either the original uncompressed body or a marked prefix
+  of that body when the request succeeded and its charge was persisted.
 
 #### Scenario: Informational response header
 - **WHEN** compression runs and `emit_response_header` is true

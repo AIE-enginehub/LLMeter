@@ -28,8 +28,9 @@ The integration must be **transparent**:
 ## What Changes
 - **New proxy stage**: between body parse and `forwarded_body` construction in
   `proxy_handler`, a protocol-aware compression pass rewrites only natural-language text
-  fields and forwards the shrunk body upstream. The original body is still what gets logged
-  (for audit); only the upstream copy is compressed.
+  fields and forwards the shrunk body upstream. The logging copy always comes from the
+  original body; successful charged requests retain at most its first 64 KiB, while error,
+  passthrough, and charge-failure logs retain the full body.
 - **New module `src/compress.rs`**: a *code-safe* port of PRECC's `compress.rs`. The filler/
   phrase lexical rules are reused verbatim; the whitespace rules are replaced with a
   code-safe variant (fenced-code-aware, never strips leading indentation) because user

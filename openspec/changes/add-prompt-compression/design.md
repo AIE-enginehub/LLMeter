@@ -34,9 +34,10 @@ Key points:
   failover loop, keyed on `actual_protocol` of the first config. Re-running per attempt is
   wasteful and the protocol is stable for a given request. Compute the compressed body
   once; reuse across failover attempts (mirrors how `body_bytes` is reused today).
-- `request_body` logged stays the **original** `body_json` (audit/debugging). The savings
-  estimate and a `compressed=true` flag are logged alongside. (Optionally, behind a flag,
-  store the forwarded body too — off by default to bound storage.)
+- The logging copy always comes from the **original**, uncompressed `body_json`. To bound
+  storage, a successful request with a persisted charge keeps at most the first 64 KiB;
+  errors, passthrough requests, and charge failures keep the full original body. The
+  savings estimate and a `compressed=true` flag are logged alongside.
 
 ## 3. The code-safety problem (the crux)
 PRECC's `compress.rs` was written for **CLAUDE.md / memory files** — markdown prose. Two of

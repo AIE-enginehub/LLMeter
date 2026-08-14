@@ -355,41 +355,61 @@ pub async fn get_compression_config(pool: &PgPool) -> crate::compress::Compressi
     crate::compress::CompressionConfig::default()
 }
 
-/// 扣除组织积分并记录流水
-pub async fn deduct_credit(
+/// 原子执行协议比例计费：扣减余额、写入积分流水并保存请求费用快照。
+/// 避免余额已扣但 request_logs 费用字段写入失败的部分成功状态。
+pub async fn apply_contract_charge(
     pool: &PgPool,
     org_id: Uuid,
-    amount: rust_decimal::Decimal,
-    reference_id: &str,
-) -> Result<(), sqlx::Error> {
-    if amount.is_zero() {
-        return Ok(());
+    log_id: Uuid,
+    credit_cost: rust_decimal::Decimal,
+    money_cost: rust_decimal::Decimal,
+    is_long_context: bool,
+) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let existing: Option<rust_decimal::Decimal> = sqlx::query_scalar(
+        "SELECT credit_cost FROM request_logs WHERE id = $1 FOR UPDATE",
+    )
+    .bind(log_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if existing.is_some() {
+        tx.rollback().await?;
+        return Ok(false);
     }
 
-    let mut tx = pool.begin().await?;
-
-    let row = sqlx::query(
-        "UPDATE organizations SET credit = credit - $1, updated_at = now() WHERE id = $2 RETURNING credit"
+    let balance_after: rust_decimal::Decimal = sqlx::query_scalar(
+        "UPDATE organizations SET credit = credit - $1, updated_at = now() \
+         WHERE id = $2 RETURNING credit",
     )
-    .bind(amount)
+    .bind(credit_cost)
     .bind(org_id)
     .fetch_one(&mut *tx)
     .await?;
 
-    let balance_after: rust_decimal::Decimal = row.get("credit");
-
     sqlx::query(
-        "INSERT INTO credit_logs (org_id, amount, balance_after, transaction_type, reference_id) VALUES ($1, $2, $3, 'consume', $4)"
+        "INSERT INTO credit_logs (org_id, amount, balance_after, transaction_type, reference_id) \
+         VALUES ($1, $2, $3, 'consume', $4)",
     )
     .bind(org_id)
-    .bind(-amount)
+    .bind(-credit_cost)
     .bind(balance_after)
-    .bind(reference_id)
+    .bind(log_id.to_string())
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "UPDATE request_logs SET credit_cost = $2, money_cost = $3, is_long_context = $4 \
+         WHERE id = $1",
+    )
+    .bind(log_id)
+    .bind(credit_cost)
+    .bind(money_cost)
+    .bind(is_long_context)
     .execute(&mut *tx)
     .await?;
 
     tx.commit().await?;
-    Ok(())
+    Ok(true)
 }
 
 /// 获取组织中指定协议的第一个可用模型配置（用于无模型名的透传请求，如 /v1/files, /v1/models）

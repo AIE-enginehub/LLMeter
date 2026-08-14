@@ -112,5 +112,15 @@ function logsTab() {
         this.logDetail = await api(`/api/logs/${id}`);
       } catch (e) { window.showToast(e.message, 'error'); }
     },
+
+    formatRequestBody(body) {
+      if (!body) return t('none');
+      if (body._llmeter_truncated === true && typeof body.prefix === 'string') {
+        const original = Number(body.original_bytes || 0).toLocaleString();
+        const retained = Number(body.retained_bytes || 0).toLocaleString();
+        return `${body.prefix}\n\n[请求体已截断：原始 ${original} 字节，保留前 ${retained} 字节]`;
+      }
+      return JSON.stringify(body, null, 2);
+    },
   };
 }

@@ -967,7 +967,7 @@
                     </template>
                     <div class="mb-4">
                       <p class="text-xs text-slate-500 font-medium mb-1.5" x-text="t('req_body')"></p>
-                      <pre class="bg-slate-900 text-slate-300 rounded-lg p-4 text-xs overflow-x-auto max-h-60 leading-relaxed whitespace-pre-wrap break-all" x-text="logDetail.request_body ? JSON.stringify(logDetail.request_body, null, 2) : t('none')"></pre>
+                      <pre class="bg-slate-900 text-slate-300 rounded-lg p-4 text-xs overflow-x-auto max-h-60 leading-relaxed whitespace-pre-wrap break-all" x-text="formatRequestBody(logDetail.request_body)"></pre>
                     </div>
                     <div>
                       <p class="text-xs text-slate-500 font-medium mb-1.5" x-text="t('resp_body')"></p>
