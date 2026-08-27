@@ -267,7 +267,6 @@ pub(super) async fn export_usage_report(
         let org_credit: Decimal = rows.iter().map(|r| r.total_credit_cost).sum();
         let org_money: Decimal = rows.iter().map(|r| r.total_money_cost).sum();
         let org_official_cost_cny: Decimal = rows.iter().map(|r| r.total_official_cost_cny).sum();
-        let org_has_standard_pricing = rows.iter().any(|r| r.standard_request_count > 0);
 
         total_requests += org_requests;
         total_credit_cost += org_credit;
@@ -285,8 +284,6 @@ pub(super) async fn export_usage_report(
             org_requests,
             org_credit,
             org_money,
-            org_official_cost_cny,
-            org_has_standard_pricing,
         )
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
@@ -536,8 +533,6 @@ fn generate_org_invoice_pdf(
     total_requests: i64,
     total_credit: Decimal,
     total_money: Decimal,
-    total_official_cost_cny: Decimal,
-    has_standard_pricing: bool,
 ) -> Result<Vec<u8>, String> {
     use printpdf::*;
 
@@ -551,11 +546,9 @@ fn generate_org_invoice_pdf(
     all_text.push_str(&format!("生成时间：{generated_at}"));
     all_text.push_str(&format!("客户：{org_name}"));
     all_text.push_str("总调用次数Credit 用量应付金额费用明细调用次数金额 (¥)项目：项目合计暂无 API Key 用量流量账单 - 费用明细（续）流量账单 - 费用汇总客户账单周期（续）");
-    if has_standard_pricing { all_text.push_str("官方成本"); }
     all_text.push_str(&format!(
-        "{}{}{}¥{}",
+        "{}{}¥{}",
         format_integer(total_requests),
-        format_decimal(total_official_cost_cny),
         format_decimal(total_credit),
         format_decimal(total_money)
     ));
@@ -564,18 +557,16 @@ fn generate_org_invoice_pdf(
     for project in projects.iter().filter(|project| project.has_usage()) {
         all_text.push_str(&project.name);
         all_text.push_str(&format!(
-            "{}{}{}{}",
+            "{}{}{}",
             format_integer(project.request_count),
-            format_decimal(project.official_cost_cny),
             format_decimal(project.credit_cost),
             format_decimal(project.money_cost)
         ));
         for key in &project.keys {
             all_text.push_str(&key.name);
             all_text.push_str(&format!(
-                "{}{}{}{}",
+                "{}{}{}",
                 format_integer(key.request_count),
-                format_decimal(key.official_cost_cny),
                 format_decimal(key.credit_cost),
                 format_decimal(key.money_cost)
             ));
@@ -593,8 +584,7 @@ fn generate_org_invoice_pdf(
 
     let lx: f32 = 22.0;
     let rx: f32 = 188.0;
-    let r2: f32 = if has_standard_pricing { 100.0 } else { 125.0 };
-    let r_official: f32 = 130.0;
+    let r2: f32 = 125.0;
     let r3: f32 = 158.0;
     let r4: f32 = 185.0;
     let mut y: f32 = 270.0;
@@ -667,24 +657,12 @@ fn generate_org_invoice_pdf(
     // ── 汇总区 ──
     fill!(0.3);
     text!("总调用次数", 8.0, lx, y + 6.0);
-    if has_standard_pricing {
-        text!("官方成本", 8.0, 64.0, y + 6.0);
-        text!("Credit 用量", 8.0, 106.0, y + 6.0);
-        text!("应付金额", 8.0, 151.0, y + 6.0);
-    } else {
-        text!("Credit 用量", 8.0, 78.0, y + 6.0);
-        text!("应付金额", 8.0, 138.0, y + 6.0);
-    }
+    text!("Credit 用量", 8.0, 78.0, y + 6.0);
+    text!("应付金额", 8.0, 138.0, y + 6.0);
     fill!(0.0);
     text!(&format_integer(total_requests), 18.0, lx, y - 5.0);
-    if has_standard_pricing {
-        text!(&format!("¥{}", format_decimal(total_official_cost_cny)), 14.0, 64.0, y - 5.0);
-        text!(&format_decimal(total_credit), 14.0, 106.0, y - 5.0);
-        text!(&format!("¥{}", format_decimal(total_money)), 14.0, 151.0, y - 5.0);
-    } else {
-        text!(&format_decimal(total_credit), 18.0, 78.0, y - 5.0);
-        text!(&format!("¥{}", format_decimal(total_money)), 18.0, 138.0, y - 5.0);
-    }
+    text!(&format_decimal(total_credit), 18.0, 78.0, y - 5.0);
+    text!(&format!("¥{}", format_decimal(total_money)), 18.0, 138.0, y - 5.0);
     y -= 22.0;
 
     // ── 分割线 ──
@@ -697,7 +675,6 @@ fn generate_org_invoice_pdf(
     y -= 10.0;
     fill!(0.2);
     right_text!("调用次数", 8.5, r2, y);
-    if has_standard_pricing { right_text!("官方成本", 8.5, r_official, y); }
     right_text!("Credit 用量", 8.5, r3, y);
     right_text!("金额 (¥)", 8.5, r4, y);
     y -= 3.5;
@@ -728,7 +705,6 @@ fn generate_org_invoice_pdf(
             hline!(253.0, 0.6, 0.7);
             fill!(0.2);
             right_text!("调用次数", 8.5, r2, 243.0);
-            if has_standard_pricing { right_text!("官方成本", 8.5, r_official, 243.0); }
             right_text!("Credit 用量", 8.5, r3, 243.0);
             right_text!("金额 (¥)", 8.5, r4, 243.0);
             hline!(239.5, 0.4, 0.6);
@@ -772,7 +748,6 @@ fn generate_org_invoice_pdf(
                     hline!(253.0, 0.6, 0.7);
                     fill!(0.2);
                     right_text!("调用次数", 8.5, r2, 243.0);
-                    if has_standard_pricing { right_text!("官方成本", 8.5, r_official, 243.0); }
                     right_text!("Credit 用量", 8.5, r3, 243.0);
                     right_text!("金额 (¥)", 8.5, r4, 243.0);
                     hline!(239.5, 0.4, 0.6);
@@ -790,14 +765,12 @@ fn generate_org_invoice_pdf(
                 }
 
                 fill!(0.18);
-                text!(&truncate_label(&key.name, if has_standard_pricing { 26 } else { 36 }), 8.6, lx + 10.0, y);
+                text!(&truncate_label(&key.name, 36), 8.6, lx + 10.0, y);
                 fill!(0.28);
                 let request_count = format_integer(key.request_count);
                 let credit_cost = format_decimal(key.credit_cost);
                 let money_cost = format_decimal(key.money_cost);
-                let official_cost = format_decimal(key.official_cost_cny);
                 right_text!(&request_count, 8.3, r2, y);
-                if has_standard_pricing { right_text!(&official_cost, 8.3, r_official, y); }
                 right_text!(&credit_cost, 8.3, r3, y);
                 right_text!(&money_cost, 8.3, r4, y);
                 y -= 8.0;
@@ -811,9 +784,7 @@ fn generate_org_invoice_pdf(
         let project_requests = format_integer(project.request_count);
         let project_credit = format_decimal(project.credit_cost);
         let project_money = format_decimal(project.money_cost);
-        let project_official = format_decimal(project.official_cost_cny);
         right_text!(&project_requests, 8.5, r2, y - 1.0);
-        if has_standard_pricing { right_text!(&project_official, 8.5, r_official, y - 1.0); }
         right_text!(&project_credit, 8.5, r3, y - 1.0);
         right_text!(&project_money, 8.5, r4, y - 1.0);
         y -= 11.0;
@@ -849,10 +820,8 @@ fn generate_org_invoice_pdf(
     text!("合计", 11.0, lx, y);
     let total_requests = format_integer(total_requests);
     let total_credit = format_decimal(total_credit);
-    let total_official = format_decimal(total_official_cost_cny);
     let total_money = format!("¥{}", format_decimal(total_money));
     right_text!(&total_requests, 11.0, r2, y);
-    if has_standard_pricing { right_text!(&total_official, 11.0, r_official, y); }
     right_text!(&total_credit, 11.0, r3, y);
     right_text!(&total_money, 11.0, r4, y);
 
@@ -929,8 +898,6 @@ mod tests {
             9146,
             dec("223194.45"),
             dec("5579.86"),
-            dec("4292.20"),
-            true,
         )
         .unwrap();
 
@@ -970,8 +937,6 @@ mod tests {
             1275,
             dec("1593.75"),
             dec("637.5"),
-            dec("318.75"),
-            false,
         )
         .unwrap();
 
