@@ -57,7 +57,6 @@ struct UsageReportDetailRow {
     total_credit_cost: Decimal,
     total_money_cost: Decimal,
     total_official_cost_cny: Decimal,
-    standard_request_count: i64,
 }
 
 struct KeyUsage {
@@ -65,7 +64,6 @@ struct KeyUsage {
     request_count: i64,
     credit_cost: Decimal,
     money_cost: Decimal,
-    official_cost_cny: Decimal,
 }
 
 struct ProjectUsage {
@@ -75,7 +73,6 @@ struct ProjectUsage {
     request_count: i64,
     credit_cost: Decimal,
     money_cost: Decimal,
-    official_cost_cny: Decimal,
 }
 
 impl ProjectUsage {
@@ -83,7 +80,6 @@ impl ProjectUsage {
         self.request_count != 0
             || !self.credit_cost.is_zero()
             || !self.money_cost.is_zero()
-            || !self.official_cost_cny.is_zero()
     }
 }
 
@@ -168,8 +164,7 @@ pub(super) async fn export_usage_report(
                 COUNT(r.id)::BIGINT AS request_count, \
                 COALESCE(SUM(r.credit_cost), 0) AS total_credit_cost, \
                 COALESCE(SUM(r.money_cost), 0) AS total_money_cost, \
-                COALESCE(SUM(r.official_cost_cny), 0) AS total_official_cost_cny, \
-                COUNT(r.id) FILTER (WHERE r.billing_mode = 'standard_pricing')::BIGINT AS standard_request_count \
+                COALESCE(SUM(r.official_cost_cny), 0) AS total_official_cost_cny \
          FROM organizations o \
          LEFT JOIN projects p ON p.org_id = o.id \
          LEFT JOIN api_keys k ON k.project_id = p.id \
@@ -239,7 +234,6 @@ pub(super) async fn export_usage_report(
                         request_count: 0,
                         credit_cost: Decimal::ZERO,
                         money_cost: Decimal::ZERO,
-                        official_cost_cny: Decimal::ZERO,
                     });
                     projects.len() - 1
                 }
@@ -249,7 +243,6 @@ pub(super) async fn export_usage_report(
             project.request_count += row.request_count;
             project.credit_cost += row.total_credit_cost;
             project.money_cost += row.total_money_cost;
-            project.official_cost_cny += row.total_official_cost_cny;
             if row.api_key_id.is_some() {
                 project.keys.push(KeyUsage {
                     name: row
@@ -259,7 +252,6 @@ pub(super) async fn export_usage_report(
                     request_count: row.request_count,
                     credit_cost: row.total_credit_cost,
                     money_cost: row.total_money_cost,
-                    official_cost_cny: row.total_official_cost_cny,
                 });
             }
         }
@@ -879,12 +871,10 @@ mod tests {
                 request_count: 9146,
                 credit_cost: dec("223194.45"),
                 money_cost: dec("5579.86"),
-                official_cost_cny: dec("4292.20"),
             }],
             request_count: 9146,
             credit_cost: dec("223194.45"),
             money_cost: dec("5579.86"),
-            official_cost_cny: dec("4292.20"),
         }];
 
         let pdf = generate_org_invoice_pdf(
@@ -913,7 +903,6 @@ mod tests {
                 request_count: index,
                 credit_cost: Decimal::from(index) * dec("1.25"),
                 money_cost: Decimal::from(index) * dec("0.5"),
-                official_cost_cny: Decimal::from(index) * dec("0.25"),
             })
             .collect();
         let projects = vec![ProjectUsage {
@@ -923,7 +912,6 @@ mod tests {
             request_count: 1275,
             credit_cost: dec("1593.75"),
             money_cost: dec("637.5"),
-            official_cost_cny: dec("318.75"),
         }];
 
         let pdf = generate_org_invoice_pdf(
